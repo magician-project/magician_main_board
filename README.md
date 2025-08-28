@@ -1,5 +1,7 @@
 # Magician Main Board for Sensing Robot
 
+![8 Protype Assembled PCBs](https://github.com/magician-project/magician_main_board/blob/main/doc/banner.jpg?raw=true) 
+
 This project implements a **multi-laser distance sensing and light control system** on an **Arduino Nano (ATmega328P)**.  
 It integrates:
 
