@@ -1,0 +1,3 @@
+This is the connector for the SONY Camera XCG-CP510
+HR10A-7P-6S
+https://www.digikey.com/en/products/detail/hirose-electric-co-ltd/HR10A-7P-6S-73/1095446
