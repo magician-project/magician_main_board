@@ -31,6 +31,11 @@ The firmware cycles lights automatically, can react to distance sensor readings,
 
 ---
 
+
+
+![Magician Main Board close-up](https://github.com/magician-project/magician_main_board/blob/main/doc/board.jpg?raw=true) 
+
+
 ## Hardware Requirements
 
 - **Arduino Nano / UNO (ATmega328P)**  
