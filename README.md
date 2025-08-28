@@ -35,10 +35,14 @@ The firmware cycles lights automatically, can react to distance sensor readings,
 
 ![Magician Main Board close-up](https://github.com/magician-project/magician_main_board/blob/main/doc/board.jpg?raw=true) 
 
+## Setup
+TODO: Write here about the camera board of Giulio
 
-## Hardware Requirements
+![Magician Main Board close-up](https://github.com/magician-project/magician_main_board/blob/main/doc/pcb.jpg?raw=true) 
 
-- **Arduino Nano / UNO (ATmega328P)**  
+## Hardware Components
+
+- **Arduino Nano with USB-Micro port/ UNO (ATmega328P)**  
 - **VL53L0X distance sensors** (x3)  
 - **W5100 Ethernet module/shield**  
 - **74HC595 shift register** (optional, for light control)  
@@ -156,7 +160,6 @@ License
 MIT License.
 This project uses Pololu’s VL53L0X Arduino Library
 
-.
 Possible Future Improvements
 
     Add MQTT over Ethernet for IoT integration
