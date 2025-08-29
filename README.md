@@ -114,6 +114,24 @@ telnet 192.168.137.64
 
 When connected via USB serial or Ethernet Telnet (port 23), you can control and query the system:
 Command	Description:
+
+| Command                     | Dangerous           | Description |
+|-----------------------------|---------------------|-------|
+| v              | No    | Print firmware version |
+| h              | Yes   | Enable 74HC595 mode + auto light cycling |
+| i              | Yes   | Disable 74HC595 (direct pin mode) |
+| o              | Maybe | Continuous lights (disable pulsing) |
+| p              | Maybe | Switch to pulsing of 500μs / Subsequent calls increase pulse length by 500µs |
+| r              | No    | Reset light cycling |
+| a              | No    | Enable sensor-based light selection |
+| t              | No    | Enable custom cycling mode (mode 3) |
+| y              | No    | Flash lights for 10s, then turn off |
+| z              | No    | Turn off all lights and reset Arduino |
+| 0-6            | No    | Manually activate light with number #N |
+| +              | No    | Step to next light |
+| f              | No    | Disable serial/Ethernet reporting |
+| x              | No    | (Ethernet only) Print local IP + hardware status | 
+
 v	Print firmware version
 h	Enable 74HC595 mode + auto light cycling
 i	Disable 74HC595 (direct pin mode)
