@@ -9,23 +9,39 @@ When connecting the main board with the rest of the system, one must always keep
 3) What is the LED Voltage input and where it is connected (Main Board OR Camera Board) 
 
 
-## Main Board Connectors
+## Main Board Connections
 
-The Main Board features the following connectors.
+
+There are 2x boards, the Main Board and the Camera Board.
+
+The Main Board looks like this and features the following connectors.
 
 ![Magician Main Board PCB Connectors](https://github.com/magician-project/magician_main_board/blob/main/doc/connectors.jpg?raw=true) 
 
 
-The Camera Board features the following connectors.
+The Camera Board looks like this and features the following connectors.
 
 ![Magician Camera Board PCB Connectors](https://github.com/magician-project/magician_main_board/blob/main/doc/camera_connector_board.jpg?raw=true) 
 
 
+If you want to use LED overvolting and H/W Sync of lights to the Camera:
+
+Please Connect the Camera Board to the Magician Main Board using a cable that ties the GREEN ( on both images above headers ).
+Please Connect the LED COBs to the Overvolted LED COB Light output of Camera Board.
+Please Connect the Overvolted LED COB input on the Direct LED Voltage Input (PINK color) of the Camera Board
+
+
+If you want to use regular non-overvolted lights and S/W Sync of lights to the Camera:
+
+You do not need the Camera Board!
+Please Connect the LED COBs to the (YELLOW Top Right) Direct LED COB Light output.
+Please Connect the 3.3V LED COB input on the Direct LED Voltage Input (PINK color) of the Main Board
+
+
+
+
+
 ## Operation Modes
-
-
-
- 
 
 ![Magician Camera Board PCB Connectors](https://github.com/magician-project/magician_main_board/blob/main/doc/camera_board.png?raw=true) 
 
