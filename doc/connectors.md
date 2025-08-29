@@ -10,10 +10,14 @@ When connecting the main board with the rest of the system, one must always keep
 
 
 ## Main Board Connectors
+
 The Main Board features the following connectors.
+
 ![Magician Main Board PCB Connectors](https://github.com/magician-project/magician_main_board/blob/main/doc/connectors.jpg?raw=true) 
 
+
 The Camera Board features the following connectors.
+
 ![Magician Camera Board PCB Connectors](https://github.com/magician-project/magician_main_board/blob/main/doc/camera_connector_board.jpg?raw=true) 
 
 
