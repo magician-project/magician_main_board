@@ -2,15 +2,16 @@
 
 ![8 Protype Assembled PCBs](https://github.com/magician-project/magician_main_board/blob/main/doc/banner.jpg?raw=true) 
 
-This project implements a **multi-laser distance sensing and light control system** on an **Arduino Nano (ATmega328P)**.  
+This project implements a **multi-laser distance sensing and light control system** on an **Arduino Nano (ATmega328P)**. 
+
 It integrates:
 
-- **3x VL53L0X time-of-flight distance sensors** (over I²C, with unique addresses via XSHUT control)  
-- **Up to 8 lights** controlled via direct GPIO or a **74HC595 shift register**  
-- **Extendable up to 64 lights** by daisy chaining more **74HC595 shift registers**  
-- **Ethernet W5100 support** (Telnet-style interface)  
-- **Two analog input buttons** for manual interaction  
-- **Serial + Ethernet reporting** of sensor readings, light state, and button presses  
+- **3x VL53L0X time-of-flight distance sensors** (over I²C, with unique addresses via XSHUT control) 
+- **Up to 8 lights** controlled via direct GPIO or a **74HC595 shift register**
+- **Extendable up to 64 lights** by daisy chaining more **74HC595 shift registers**
+- **Ethernet W5100 support** (Telnet-style interface) 
+- **Two analog input buttons** for manual interaction
+- **Serial + Ethernet reporting** of sensor readings, light state, and button presses
 
 The firmware cycles lights automatically, can react to distance sensor readings, and supports both **serial commands** and **Ethernet control**.
 
@@ -18,11 +19,11 @@ The firmware cycles lights automatically, can react to distance sensor readings,
 
 ## Features
 
-- 🔦 **Triple VL53L0X** laser distance sensors on a shared I²C bus  
-- 💡 **Six-Eight light outputs** (direct pin mode or via 74HC595 shift register)  
-- 🌐 **Ethernet W5100 support** with telnet-style server on port `23`  
-- 🎛️ **Two analog buttons** (for annotations / input)  
-- ⚡ **Low-level SRAM monitoring** and reset recovery functions  
+- 🔦 **3x VL53L0X** laser distance sensors on a shared I²C bus
+- 💡 **6x-8x LED light outputs** (6x direct pin mode or 8x via 74HC595 shift register)
+- 🌐 **Ethernet W5100 support** with telnet-style server on port `23`
+- 🎛️ **Two analog buttons** (for annotations / input)
+- ⚡ **Low-level SRAM monitoring** and reset recovery functions
 - 🛠️ **Configurable light modes:**
   - Sequential cycling
   - Pulse mode
@@ -112,7 +113,9 @@ To connect to Ethernet (assuming you are on the correct subnet)
 telnet 192.168.137.64
 ```
 
-When connected via USB serial or Ethernet Telnet (port 23), you can control and query the system:
+When connected via USB serial or Ethernet Telnet (port 23), you can control and query the system by supplying the following command bytes.
+
+
 Command	Description:
 
 | Command                     | Dangerous           | Description |
@@ -127,25 +130,11 @@ Command	Description:
 | t              | No    | Enable custom cycling mode (mode 3) |
 | y              | No    | Flash lights for 10s, then turn off |
 | z              | No    | Turn off all lights and reset Arduino |
-| 0-6            | No    | Manually activate light with number #N |
-| +              | No    | Step to next light |
+| 0-6            | Yes   | Manually activate light with number #N |
+| +              | Yes   | Step to next light |
 | f              | No    | Disable serial/Ethernet reporting |
 | x              | No    | (Ethernet only) Print local IP + hardware status | 
 
-v	Print firmware version
-h	Enable 74HC595 mode + auto light cycling
-i	Disable 74HC595 (direct pin mode)
-o	Continuous lights (disable pulsing)
-p	Switch to pulsing of 500μs / Subsequent calls increase pulse length by 500µs
-r	Reset light cycling
-a	Enable sensor-based light selection
-t	Enable custom cycling mode (mode 3)
-y	Flash lights for 10s, then turn off
-z	Turn off all lights and reset Arduino
-0–6	Manually activate light with number #N
-+	Step to next light
-f	Disable serial/Ethernet reporting
-x	(Ethernet only) Print local IP + hardware status
 
 Commands with * on their description are dangerous! Please see [the setup guide](doc/connectors.md) 
 
