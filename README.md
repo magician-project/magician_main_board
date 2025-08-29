@@ -136,8 +136,8 @@ Command	Description:
 | x              | No    | (Ethernet only) Print local IP + hardware status | 
 
 
-Commands marked as potentially dangerous refer to when blindly used with a connected Camera Board.
-Please see [the setup guide](doc/connectors.md) to understand why. 
+Commands marked as potentially dangerous directly alter light states that can be dangerous when
+using a connected Camera Board that over volts lights. Please see [the setup guide](doc/connectors.md) to understand why. 
 
 
 Data Reporting
