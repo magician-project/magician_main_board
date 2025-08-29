@@ -107,7 +107,7 @@ VL53L0X lox[3];
 byte mac[] = { 0x02, 0xAB, 0xCD, 0x12, 0x34, 0x56 };
 
 
-byte gateway[] = {192,168,1,3};
+byte gateway[] = {192,168,137,1};
 byte *dns = gateway;
 byte subnet[] = {255,255,255,0};
 IPAddress ip(192,168,137,64);
