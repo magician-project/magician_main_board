@@ -136,7 +136,8 @@ Command	Description:
 | x              | No    | (Ethernet only) Print local IP + hardware status | 
 
 
-Commands with * on their description are dangerous! Please see [the setup guide](doc/connectors.md) 
+Commands marked as potentially dangerous refer to when blindly used with a connected Camera Board.
+Please see [the setup guide](doc/connectors.md) to understand why. 
 
 
 Data Reporting

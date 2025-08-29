@@ -1,6 +1,6 @@
 # Magician Main Board Connections
 
-Due to Magician being a research project (with a pending cascade round), there has been an effort to make the Magician Main board 
+Due to Magician being a research project (with a pending cascade round) and hardware being very difficult to upgrade there has been an effort to make the Magician Main board 
 as expandable as possible, supporting a variety of operation modes using the same hardware.
 
 When connecting the main board with the rest of the system, one must always keep in mind:
