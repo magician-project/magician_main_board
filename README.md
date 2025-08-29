@@ -115,8 +115,8 @@ telnet 192.168.137.64
 When connected via USB serial or Ethernet Telnet (port 23), you can control and query the system:
 Command	Description:
 v	Print firmware version
-h	[Careful, read the setup guide](doc/connectors.md) Enable 74HC595 mode + auto light cycling
-i	[Careful, read the setup guide](doc/connectors.md) Disable 74HC595 (direct pin mode)
+h	*Enable 74HC595 mode + auto light cycling
+i	*Disable 74HC595 (direct pin mode)
 o	Continuous lights (disable pulsing)
 p	Switch to pulsing of 500μs / Subsequent calls increase pulse length by 500µs
 r	Reset light cycling
@@ -124,10 +124,14 @@ a	Enable sensor-based light selection
 t	Enable custom cycling mode (mode 3)
 y	Flash lights for 10s, then turn off
 z	Turn off all lights and reset Arduino
-0–6	[Careful, please read the setup guide](doc/connectors.md) Manually activate light with number #N
-+	[Careful, please read the setup guide](doc/connectors.md) Step to next light
+0–6	*Manually activate light with number #N
++	*Step to next light
 f	Disable serial/Ethernet reporting
 x	(Ethernet only) Print local IP + hardware status
+
+Commands with * on their description are dangerous! Please see [the setup guide](doc/connectors.md) 
+
+
 Data Reporting
 
 When enabled, the Arduino periodically outputs status lines in CSV format:
