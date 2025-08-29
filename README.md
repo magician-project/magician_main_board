@@ -36,9 +36,9 @@ The firmware cycles lights automatically, can react to distance sensor readings,
 ![Magician Main Board close-up](https://github.com/magician-project/magician_main_board/blob/main/doc/board.jpg?raw=true) 
 
 ## Setup
-TODO: Write here about the camera board of Giulio
 
-![Magician Main Board close-up](https://github.com/magician-project/magician_main_board/blob/main/doc/pcb.jpg?raw=true) 
+Important: Before connecting the board, [read the following guide](doc/connectors.md)!
+
 
 ## Hardware Components
 

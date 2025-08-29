@@ -6,3 +6,4 @@ Due to Magician being a research project (with a pending cascade funding round),
 as expandable as possible .
 
 
+![Magician Main Board close-up](https://github.com/magician-project/magician_main_board/blob/main/doc/pcb.jpg?raw=true) 
