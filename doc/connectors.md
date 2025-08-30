@@ -31,7 +31,7 @@ If you want to use regular non-overvolted lights and S/W Sync of lights to the C
 1) You do not need the Camera Board!
 2) Connect the LED COBs to the (YELLOW Top Right) Direct LED COB Light output.
 3) Connect the 3.3V LED COB input on the Direct LED Voltage Input (PINK color) of the Main Board
-4) Start the Magician Mainboard by supplying the "h" byte 
+4) Start the Magician Mainboard by sending an "h" byte 
 
 
 If you want to use LED overvolting and H/W Sync of lights to the Camera:
@@ -39,7 +39,7 @@ If you want to use LED overvolting and H/W Sync of lights to the Camera:
 1) Connect the Camera Board to the Magician Main Board using a cable that ties the GREEN ( on both images above headers ).
 2) Connect the LED COBs to the Overvolted LED COB Light output of the Camera Board.
 3) Connect the Overvolted LED COB input voltage on the Direct LED Voltage Input (PINK color) of the Camera Board
-4) Start the Magician Mainboard by supplying the "i" byte 
+4) Start the Magician Mainboard by sending an "i" byte 
 
 
 ## Closer look on the PCBs and Diagrams
