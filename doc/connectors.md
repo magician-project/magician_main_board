@@ -9,8 +9,7 @@ When connecting the main board with the rest of the system, one must always keep
 3) What is the LED Voltage input and where it is connected (Main Board OR Camera Board) 
 
 
-## Main Board Connections
-
+## Main Board and Camera Board Connections overview
 
 There are 2x boards, the Main Board and the Camera Board.
 
@@ -24,30 +23,33 @@ The Camera Board looks like this and features the following connectors.
 ![Magician Camera Board PCB Connectors](https://github.com/magician-project/magician_main_board/blob/main/doc/camera_connector_board.jpg?raw=true) 
 
 
+## Main Board Setup Scenarios
+
+
 If you want to use LED overvolting and H/W Sync of lights to the Camera:
 
-Please Connect the Camera Board to the Magician Main Board using a cable that ties the GREEN ( on both images above headers ).
-Please Connect the LED COBs to the Overvolted LED COB Light output of Camera Board.
-Please Connect the Overvolted LED COB input on the Direct LED Voltage Input (PINK color) of the Camera Board
+1) Please Connect the Camera Board to the Magician Main Board using a cable that ties the GREEN ( on both images above headers ).
+2) Please Connect the LED COBs to the Overvolted LED COB Light output of Camera Board.
+3) Please Connect the Overvolted LED COB input on the Direct LED Voltage Input (PINK color) of the Camera Board
 
 
 If you want to use regular non-overvolted lights and S/W Sync of lights to the Camera:
 
-You do not need the Camera Board!
-Please Connect the LED COBs to the (YELLOW Top Right) Direct LED COB Light output.
-Please Connect the 3.3V LED COB input on the Direct LED Voltage Input (PINK color) of the Main Board
+1) You do not need the Camera Board!
+2) Please Connect the LED COBs to the (YELLOW Top Right) Direct LED COB Light output.
+3) Please Connect the 3.3V LED COB input on the Direct LED Voltage Input (PINK color) of the Main Board
 
 
 
 
-
-## Operation Modes
+## Closer look on the PCBs and Diagrams
 
 ![Magician Camera Board PCB Connectors](https://github.com/magician-project/magician_main_board/blob/main/doc/camera_board.png?raw=true) 
 
 ![Magician Main Board close-up](https://github.com/magician-project/magician_main_board/blob/main/doc/pcb.jpg?raw=true) 
 
 
+## Connecting Ethernet support using a W5100
 
 ![W5100 Ethernet SPI chip](https://github.com/magician-project/magician_main_board/blob/main/src/arduino/CameraControllerNano/W5100.jpg?raw=true) 
 
