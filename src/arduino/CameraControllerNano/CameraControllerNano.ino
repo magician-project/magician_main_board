@@ -70,8 +70,9 @@ unsigned int loopRateMsec            = 10;  // 1000ms = 1Hz / 20ms = 50Hz / -> 1
 unsigned int lightDurationMsec       = 100; // milliseconds that each light remains activated by default
 unsigned int lightTurnOffMicrosecond = 0;   // If not zero ensures that each light remains powered for no more than this time
 //-------------------------------------------------------
-unsigned char autoLights = 0; //By default use time out 
-unsigned char lightOn    = NO_LIGHT_ON; //Start at first light
+unsigned char digitizeAnalog  = 1; //By default make buttons 1/0
+unsigned char autoLights      = 0; //By default use time out 
+unsigned char lightOn         = NO_LIGHT_ON; //Start at first light
 //-------------------------------------------------------
 unsigned long lastUpdateTime = 0;
 unsigned long lightStartTime = 0;
@@ -107,7 +108,7 @@ VL53L0X lox[3];
 byte mac[] = { 0x02, 0xAB, 0xCD, 0x12, 0x34, 0x56 };
 
 
-byte gateway[] = {192,168,137,1};
+byte gateway[] = {192,168,1,3};
 byte *dns = gateway;
 byte subnet[] = {255,255,255,0};
 IPAddress ip(192,168,137,64);
@@ -119,6 +120,7 @@ EthernetClient client;
 void ethPrint(const __FlashStringHelper *msg)   { if (client) client.print(msg); }
 void ethPrint(const char *msg)                  { if (client) client.print(msg); }
 void ethPrint(int val)                          { if (client) client.print((int) val); }
+void ethPrint(unsigned int val)                 { if (client) client.print((unsigned int) val); }
 void ethPrint(unsigned long val)                { if (client) client.print((unsigned long) val); }
 void ethPrintln(const __FlashStringHelper *msg) { if (client) client.println(msg); }
 void ethPrintln(const char *msg)                { if (client) client.println(msg); }
@@ -603,7 +605,8 @@ void setup()
  
   //2 Analog input buttons
   pinMode(annotationButton, INPUT);  
-  pinMode(secondButton,     INPUT);   
+  pinMode(secondButton,     INPUT);
+  digitizeAnalog = 1; //By default digitize values
 
 
   //--------------------------------------
@@ -719,7 +722,7 @@ void flush()
   #endif
 }
  
-void reportState(unsigned long currentTime,unsigned char buttonState,unsigned char button2State)
+void reportState(unsigned long currentTime,unsigned int buttonRaw1,unsigned int buttonRaw2)
 {
              Serial.print(currentTime);
              #if USE_ETHERNET
@@ -728,16 +731,16 @@ void reportState(unsigned long currentTime,unsigned char buttonState,unsigned ch
 
              comma();
 
-             Serial.print(buttonState);
+             Serial.print(buttonRaw1);
              #if USE_ETHERNET
-              ethPrint(buttonState); 
+              ethPrint(buttonRaw1); 
              #endif
 
              comma();
 
-             Serial.print(button2State);
+             Serial.print(buttonRaw2);
              #if USE_ETHERNET
-              ethPrint(button2State); 
+              ethPrint(buttonRaw2); 
              #endif
 
              comma();
@@ -784,27 +787,27 @@ void loop()
   unsigned long currentTime = millis();
 
   // Read button state
-  int buttonRaw1 =  analogRead(annotationButton);
+  unsigned int buttonRaw1 =  analogRead(annotationButton);
   analogRead(SCL_PIN);
   analogRead(SDA_PIN);
   analogRead(I2C_EXTRA_PIN);
-  int buttonRaw2 =  analogRead(secondButton);
-  /*
-  delay(30);
-  Serial.print("Button 1 : ");
-  Serial.print((int) buttonRaw1);
-  Serial.print(" Button 2 : ");
-  Serial.println((int) buttonRaw2);*/
-
-  unsigned char buttonState = 0;
-  unsigned char button2State = 0;
-
-  if ( (buttonRaw1<312) || (buttonRaw2<312) )
-  { //A button was pressed, not sure which!
-  if ( (buttonRaw1 == 0 ) && (buttonRaw2 > buttonRaw1) )  { buttonState = 1; } else
-  //if ( (buttonRaw1 == 0 ) && (buttonRaw2 == 0)         )  { buttonState = 1; button2State = 1; } else <- Never accept both
-  if ( (buttonRaw2 == 0 ) && (buttonRaw1 > buttonRaw2) )  { button2State = 1; }
+  unsigned int buttonRaw2 =  analogRead(secondButton);
+ 
+  
+  //Serial.print(F("Digitize Analog = "));
+  //Serial.println(digitizeAnalog);
+  if (digitizeAnalog==1)
+  {
+     buttonRaw1 = 0;
+     buttonRaw2 = 0;
+     if ( (buttonRaw1<312) || (buttonRaw2<312) )
+     { //A button was pressed, not sure which!
+      if ( (buttonRaw1 == 0 ) && (buttonRaw2 > buttonRaw1) )  { buttonRaw1 = 1; } else
+      //if ( (buttonRaw1 == 0 ) && (buttonRaw2 == 0)       )  { buttonRaw1 = 1; buttonRaw2 = 1; } else <- Never accept both
+      if ( (buttonRaw2 == 0 ) && (buttonRaw1 > buttonRaw2) )  { buttonRaw2 = 1; }
+     }
   }
+
 
   char receivedChar = 0;
 
@@ -871,6 +874,8 @@ void loop()
           break;
           case 'o': lightTurnOffMicrosecond  = 0;   break; //Pulse lights
           case 'p': lightTurnOffMicrosecond += 500; break; //Pulse lights
+          case 'b': digitizeAnalog=1; break; 
+          case 'n': digitizeAnalog=0; break; 
           case 'r': autoLights=1; lightOn = 0; break; 
           case 'a': autoLights=2; break; 
           case 't': autoLights=3; lightOn = 0; break; 
@@ -898,7 +903,7 @@ void loop()
                     lightOn = getNextLight(lightOn,NUMBER_OF_LIGHTS,autoLights);
                     activateLight(lightOn);
                     lightStartTime = currentTime;//New light just started
-                    reportState(currentTime,buttonState,button2State);
+                    reportState(currentTime,buttonRaw1,buttonRaw2);
           break;
         };
     }
@@ -947,7 +952,7 @@ void loop()
             //Serial Output--------------------------------
             if (serialOutputEnabled) 
             {
-              reportState(currentTime,buttonState,button2State);
+              reportState(currentTime,buttonRaw1,buttonRaw2);
             }
             //-------------------------------------------
         }
