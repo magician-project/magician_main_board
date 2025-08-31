@@ -19,7 +19,7 @@
 #define NUMBER_OF_DISTANCE_SENSORS 3
 
 #define VERSION_MAJOR 0
-#define VERSION_MINOR 26
+#define VERSION_MINOR 28
 
 // I2C communication
 #define SDA_PIN A4

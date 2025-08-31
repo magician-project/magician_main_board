@@ -144,6 +144,8 @@ Command	Description:
 | +              | Yes   | Step to next light |
 | f              | No    | Disable serial/Ethernet reporting |
 | x              | No    | (Ethernet only) Print local IP + hardware status | 
+| b              | No    | Make Analog Buttons have binary output  1/0 | 
+| n              | No    | Make Analog Buttons have non-binary output  0-1024 | 
 
 
 Commands marked as potentially dangerous directly alter light states that can be dangerous when
