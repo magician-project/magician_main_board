@@ -108,10 +108,20 @@ Change:
 
 Serial & Ethernet Commands
 
-```
+
 To connect to Ethernet (assuming you are on the correct subnet)
+```
 telnet 192.168.137.64
 ```
+
+
+To connect using USB/Serial (assuming you are connected over USB)
+```
+sudo apt install picocom
+picocom -b 115200 /dev/ttyUSB0  --imap lfcrlf 
+Ctrl + A + Q to exit
+```
+
 
 When connected via USB serial or Ethernet Telnet (port 23), you can control and query the system by supplying the following command bytes.
 
