@@ -4,6 +4,8 @@
 
 This project implements a **multi-laser distance sensing and light control system** on an **Arduino Nano (ATmega328P)**. 
 
+The software that drives this PCB (along with the Camera/ATI/Teensy) is the [Magician Grabber](https://github.com/magician-project/magician_grabber)
+
 It integrates:
 
 - **3x VL53L0X time-of-flight distance sensors** (over I²C, with unique addresses via XSHUT control) 
