@@ -1,0 +1,53 @@
+MCP23018
+Port GPA0 is connected to Push Button 0 (PB0) Input
+Port GPA1 is connected to Push Button 1 (PB1) Input
+Port GPA2 is connected to ETH Reset pin (Output)
+Port GPA3 is connected to XSHUT/laserSwitch port 1 (Output)
+Port GPA4 is connected to XSHUT/laserSwitch port 2 (Output)
+Port GPA5 is connected to XSHUT/laserSwitch port 3 (Output)
+Port GPA6 is connected to A 5V Rail Enable pin (Output) (This will be inverted in 1.4)
+Port GPA7 is connected to A 11.5V Rail Enable pin (Output) (This will be inverted in 1.4)
+
+Port GPB0 is connected to nothing
+Port GPB1 is connected to nothing 
+Port GPB2 is connected to nothing 
+Port GPB3 is connected to nothing
+Port GPB4 is connected to nothing
+Port GPB5 is connected to nothing
+Port GPB6 is connected to nothing
+Port GPB7 is connected to nothing
+
+
+The initialization of the MCP23018 must be:
+GPA0 is an input button
+GPA1 is an input button
+GPA2 is an output and should be High
+GPA3,GPA4,GPA5 are outputs and should be High
+GPA6 is an output should also be High 
+GPA7 is an output should also be High
+
+
+Ports GP4 and GP5 are connected to 3x ToF I2C sensors with initial address 0x52
+The address of the MCP23018 is 0x20
+
+
+The XCG-CP510 Camera is emitting an Active High exposure signal to Port GP2 of the Pico 2
+
+The exposure signal enables a specific light.
+Lights are connected in the following way.
+
+Light 1 is connected to GP6
+Light 2 is connected to GP7
+Light 3 is connected to GP8
+Light 4 is connected to GP9
+Light 5 is connected to GP10
+Light 6 is connected to GP11
+
+The ethernet (W5500 USR-ES1)
+is connected in the following way:
+MISO is connected to GP16 of the Pico2
+MOSI is connected to GP19 of the Pico2
+SCCLK is connected to GP18 of the Pico2
+SCN is connected to GP17 of the Pico2
+INT is connected to GP22 of the Pico2
+RST is connected to GPA2 of the MCP23018
