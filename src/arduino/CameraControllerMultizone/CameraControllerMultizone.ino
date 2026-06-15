@@ -217,6 +217,11 @@ uint16_t laser_distance_millimeters[NUMBER_OF_DISTANCE_SENSORS] = {0};
 // Full 8×8 (64-zone) distance frame for each sensor, refreshed every time
 // read_triple_sensors() pulls a new frame.  Streamed verbatim by reportZones().
 uint16_t zoneDistances[NUMBER_OF_DISTANCE_SENSORS][64] = {0};
+// Per-sensor "fresh frame captured but not yet transmitted" flag.  Set when
+// read_triple_sensors() pulls a new frame, cleared by reportZones() once it is
+// sent — so each ToF frame is written to disk exactly once even when the report
+// rate (camera frame rate, up to 23 Hz) exceeds the 15 Hz sensor ranging rate.
+uint8_t zoneFrameFresh[NUMBER_OF_DISTANCE_SENSORS] = {0};
 // When set, every reportState() line is followed by three "x1/x2/x3" zone lines.
 // Defaults ON: this firmware only runs on the multizone (VL53L5CX) hardware.
 bool emitAllZones = true;
@@ -529,7 +534,7 @@ void setI2CDistanceAddresses()
 
     // Configure ranging: 8×8 zone map, 10 Hz update rate
     tof[i].setResolution(64);       // 64 zones = 8×8 grid
-    tof[i].setRangingFrequency(10); // Hz
+    tof[i].setRangingFrequency(15); // Hz — 15 is the VL53L5CX maximum at 8×8 resolution
     tof[i].startRanging();
 
     laser_working[i] = 1;
@@ -584,6 +589,7 @@ void read_triple_sensors()
         int16_t d = tofResults.distance_mm[z];
         zoneDistances[i][z] = (d > 0) ? (uint16_t)d : 0;
       }
+      zoneFrameFresh[i] = 1;  // mark this new frame as pending transmission
     }
   }
 }
@@ -767,18 +773,26 @@ void reportState(unsigned long ts, unsigned int b1, unsigned int b2)
   flush();
 }
 
-// Emit the full 8×8 ToF frames as three extra lines, one per sensor:
+// Emit the full 8×8 ToF frame for each sensor that has new, not-yet-sent data,
+// as one extra line per sensor:
 //   x1,<ts>,z0,z1,…,z63
 //   x2,<ts>,z0,…,z63
 //   x3,<ts>,z0,…,z63
+// A sensor whose frame has already been transmitted (zoneFrameFresh==0) is
+// skipped, so stale frames are never re-sent — at 23 Hz reporting with a 15 Hz
+// sensor rate, roughly a third of the ticks emit no zone line at all instead of
+// duplicating the previous frame on disk.
 // The leading "x" tag lets the host route these to a separate file while the
 // compact reportState() line (which starts with a digit) is parsed as before.
 // ts is the same device timestamp passed to reportState() for this frame, so
 // the host can join the two streams row-for-row.
 void reportZones(unsigned long ts)
 {
+  bool emittedAny = false;
   for (uint8_t s = 0; s < NUMBER_OF_DISTANCE_SENSORS; s++)
   {
+    if (!zoneFrameFresh[s]) continue;  // already transmitted — don't duplicate
+
     Serial.print(F("x")); Serial.print((int)(s + 1));
 #if USE_ETHERNET
     if (client) { client.print(F("x")); client.print((int)(s + 1)); }
@@ -794,8 +808,11 @@ void reportZones(unsigned long ts)
       number((int)zoneDistances[s][z]);
     }
     newline();
+
+    zoneFrameFresh[s] = 0;  // mark as transmitted so it is not re-sent
+    emittedAny = true;
   }
-  flush();
+  if (emittedAny) flush();
 }
 
 // =============================================================================
