@@ -65,8 +65,8 @@
 // =============================================================================
 //  Version
 // =============================================================================
-#define VERSION_MAJOR 0
-#define VERSION_MINOR 29
+#define VERSION_MAJOR 1
+#define VERSION_MINOR 0
 
 // =============================================================================
 //  Debug macros
@@ -213,6 +213,13 @@ VL53L5CX_ResultsData tofResults;  // Single results buffer, reused across all se
 uint8_t  laser_working[NUMBER_OF_DISTANCE_SENSORS] = {0};   // 1 if sensor initialised OK
 uint8_t  laser_status [NUMBER_OF_DISTANCE_SENSORS] = {0};   // 1 if new data available this tick
 uint16_t laser_distance_millimeters[NUMBER_OF_DISTANCE_SENSORS] = {0};
+
+// Full 8×8 (64-zone) distance frame for each sensor, refreshed every time
+// read_triple_sensors() pulls a new frame.  Streamed verbatim by reportZones().
+uint16_t zoneDistances[NUMBER_OF_DISTANCE_SENSORS][64] = {0};
+// When set, every reportState() line is followed by three "x1/x2/x3" zone lines.
+// Defaults ON: this firmware only runs on the multizone (VL53L5CX) hardware.
+bool emitAllZones = true;
 
 // =============================================================================
 //  MCP23018 state
@@ -569,6 +576,14 @@ void read_triple_sensors()
     {
       laser_status[i] = 1;
       laser_distance_millimeters[i] = centerDistanceMm(tofResults);
+
+      // Keep the whole 8×8 frame so reportZones() can stream every zone.
+      // Clamp invalid (<=0) zones to 0 so the column count stays fixed.
+      for (uint8_t z = 0; z < 64; z++)
+      {
+        int16_t d = tofResults.distance_mm[z];
+        zoneDistances[i][z] = (d > 0) ? (uint16_t)d : 0;
+      }
     }
   }
 }
@@ -749,6 +764,37 @@ void reportState(unsigned long ts, unsigned int b1, unsigned int b2)
     if (i != NUMBER_OF_LIGHTS - 1) comma();
   }
   newline();
+  flush();
+}
+
+// Emit the full 8×8 ToF frames as three extra lines, one per sensor:
+//   x1,<ts>,z0,z1,…,z63
+//   x2,<ts>,z0,…,z63
+//   x3,<ts>,z0,…,z63
+// The leading "x" tag lets the host route these to a separate file while the
+// compact reportState() line (which starts with a digit) is parsed as before.
+// ts is the same device timestamp passed to reportState() for this frame, so
+// the host can join the two streams row-for-row.
+void reportZones(unsigned long ts)
+{
+  for (uint8_t s = 0; s < NUMBER_OF_DISTANCE_SENSORS; s++)
+  {
+    Serial.print(F("x")); Serial.print((int)(s + 1));
+#if USE_ETHERNET
+    if (client) { client.print(F("x")); client.print((int)(s + 1)); }
+#endif
+    comma();
+    Serial.print(ts);
+#if USE_ETHERNET
+    if (client) client.print(ts);
+#endif
+    for (uint8_t z = 0; z < 64; z++)
+    {
+      comma();
+      number((int)zoneDistances[s][z]);
+    }
+    newline();
+  }
   flush();
 }
 
@@ -1098,6 +1144,9 @@ void loop()
       case 'o': lightTurnOffMicroseconds  = 1000;  break;  // reset to default max light-on time
       case 'p': lightTurnOffMicroseconds += 500;  break;  // extend max light-on time
 
+      case 'm': emitAllZones = true;  break;  // stream full 8×8 zone frames (x1/x2/x3 lines)
+      case 'c': emitAllZones = false; break;  // compact only — suppress zone frames
+
       case 'f': serialOutputEnabled = false;           break;
       case 'z': deactivateLights(); autoLights = 0; resetFunc(); break;
 
@@ -1107,6 +1156,7 @@ void loop()
         activateLight(lightOn);
         lightStartTime = currentTime;
         reportState(currentTime, buttonRaw1, buttonRaw2);
+        if (emitAllZones) reportZones(currentTime);
         break;
 
 #if USE_ETHERNET
@@ -1155,7 +1205,10 @@ void loop()
 #endif
 
       if (serialOutputEnabled)
+      {
         reportState(currentTime, buttonRaw1, buttonRaw2);
+        if (emitAllZones) reportZones(currentTime);
+      }
     }
   }
 
