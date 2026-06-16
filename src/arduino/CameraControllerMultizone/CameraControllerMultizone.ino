@@ -170,11 +170,17 @@ const uint8_t directLightControl[NUMBER_OF_LIGHTS] = {6, 7, 8, 9, 10, 11};
 #define ETHERNET_INT_PIN 22   // GP22, active-low interrupt from W5500
 
 // Network configuration — adjust to suit your deployment
+
+
 byte     mac[]     = {0x02, 0xAB, 0xCD, 0x12, 0x34, 0x56};
-IPAddress ip(192, 168, 137, 64);
-byte     gateway[] = {192, 168, 1, 3};
+
+//Laptop IP should be something like : 169.254.153.1
+//SONY Camera IP should be something like : 169.254.143.109
+//Let's make this device compatible with all of these!
+IPAddress ip(169, 254, 143, 23);
+byte     gateway[] = {169, 254, 143, 1};
 byte    *dns       = gateway;
-byte     subnet[]  = {255, 255, 255, 0};
+byte     subnet[]  = {255, 255, 0, 0};
 
 EthernetServer server(23);   // Telnet-style command server on port 23
 EthernetClient client;
