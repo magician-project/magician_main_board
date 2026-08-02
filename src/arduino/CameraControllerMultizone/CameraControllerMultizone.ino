@@ -65,8 +65,8 @@
 // =============================================================================
 //  Version
 // =============================================================================
-#define VERSION_MAJOR 0
-#define VERSION_MINOR 29
+#define VERSION_MAJOR 1
+#define VERSION_MINOR 0
 
 // =============================================================================
 //  Debug macros
@@ -170,11 +170,17 @@ const uint8_t directLightControl[NUMBER_OF_LIGHTS] = {6, 7, 8, 9, 10, 11};
 #define ETHERNET_INT_PIN 22   // GP22, active-low interrupt from W5500
 
 // Network configuration — adjust to suit your deployment
+
+
 byte     mac[]     = {0x02, 0xAB, 0xCD, 0x12, 0x34, 0x56};
-IPAddress ip(192, 168, 137, 64);
-byte     gateway[] = {192, 168, 1, 3};
+
+//Laptop IP should be something like : 169.254.153.1
+//SONY Camera IP should be something like : 169.254.143.109
+//Let's make this device compatible with all of these!
+IPAddress ip(169, 254, 143, 23);
+byte     gateway[] = {169, 254, 143, 1};
 byte    *dns       = gateway;
-byte     subnet[]  = {255, 255, 255, 0};
+byte     subnet[]  = {255, 255, 0, 0};
 
 EthernetServer server(23);   // Telnet-style command server on port 23
 EthernetClient client;
@@ -213,6 +219,18 @@ VL53L5CX_ResultsData tofResults;  // Single results buffer, reused across all se
 uint8_t  laser_working[NUMBER_OF_DISTANCE_SENSORS] = {0};   // 1 if sensor initialised OK
 uint8_t  laser_status [NUMBER_OF_DISTANCE_SENSORS] = {0};   // 1 if new data available this tick
 uint16_t laser_distance_millimeters[NUMBER_OF_DISTANCE_SENSORS] = {0};
+
+// Full 8×8 (64-zone) distance frame for each sensor, refreshed every time
+// read_triple_sensors() pulls a new frame.  Streamed verbatim by reportZones().
+uint16_t zoneDistances[NUMBER_OF_DISTANCE_SENSORS][64] = {0};
+// Per-sensor "fresh frame captured but not yet transmitted" flag.  Set when
+// read_triple_sensors() pulls a new frame, cleared by reportZones() once it is
+// sent — so each ToF frame is written to disk exactly once even when the report
+// rate (camera frame rate, up to 23 Hz) exceeds the 15 Hz sensor ranging rate.
+uint8_t zoneFrameFresh[NUMBER_OF_DISTANCE_SENSORS] = {0};
+// When set, every reportState() line is followed by three "x1/x2/x3" zone lines.
+// Defaults ON: this firmware only runs on the multizone (VL53L5CX) hardware.
+bool emitAllZones = true;
 
 // =============================================================================
 //  MCP23018 state
@@ -522,7 +540,7 @@ void setI2CDistanceAddresses()
 
     // Configure ranging: 8×8 zone map, 10 Hz update rate
     tof[i].setResolution(64);       // 64 zones = 8×8 grid
-    tof[i].setRangingFrequency(10); // Hz
+    tof[i].setRangingFrequency(15); // Hz — 15 is the VL53L5CX maximum at 8×8 resolution
     tof[i].startRanging();
 
     laser_working[i] = 1;
@@ -569,6 +587,15 @@ void read_triple_sensors()
     {
       laser_status[i] = 1;
       laser_distance_millimeters[i] = centerDistanceMm(tofResults);
+
+      // Keep the whole 8×8 frame so reportZones() can stream every zone.
+      // Clamp invalid (<=0) zones to 0 so the column count stays fixed.
+      for (uint8_t z = 0; z < 64; z++)
+      {
+        int16_t d = tofResults.distance_mm[z];
+        zoneDistances[i][z] = (d > 0) ? (uint16_t)d : 0;
+      }
+      zoneFrameFresh[i] = 1;  // mark this new frame as pending transmission
     }
   }
 }
@@ -750,6 +777,48 @@ void reportState(unsigned long ts, unsigned int b1, unsigned int b2)
   }
   newline();
   flush();
+}
+
+// Emit the full 8×8 ToF frame for each sensor that has new, not-yet-sent data,
+// as one extra line per sensor:
+//   x1,<ts>,z0,z1,…,z63
+//   x2,<ts>,z0,…,z63
+//   x3,<ts>,z0,…,z63
+// A sensor whose frame has already been transmitted (zoneFrameFresh==0) is
+// skipped, so stale frames are never re-sent — at 23 Hz reporting with a 15 Hz
+// sensor rate, roughly a third of the ticks emit no zone line at all instead of
+// duplicating the previous frame on disk.
+// The leading "x" tag lets the host route these to a separate file while the
+// compact reportState() line (which starts with a digit) is parsed as before.
+// ts is the same device timestamp passed to reportState() for this frame, so
+// the host can join the two streams row-for-row.
+void reportZones(unsigned long ts)
+{
+  bool emittedAny = false;
+  for (uint8_t s = 0; s < NUMBER_OF_DISTANCE_SENSORS; s++)
+  {
+    if (!zoneFrameFresh[s]) continue;  // already transmitted — don't duplicate
+
+    Serial.print(F("x")); Serial.print((int)(s + 1));
+#if USE_ETHERNET
+    if (client) { client.print(F("x")); client.print((int)(s + 1)); }
+#endif
+    comma();
+    Serial.print(ts);
+#if USE_ETHERNET
+    if (client) client.print(ts);
+#endif
+    for (uint8_t z = 0; z < 64; z++)
+    {
+      comma();
+      number((int)zoneDistances[s][z]);
+    }
+    newline();
+
+    zoneFrameFresh[s] = 0;  // mark as transmitted so it is not re-sent
+    emittedAny = true;
+  }
+  if (emittedAny) flush();
 }
 
 // =============================================================================
@@ -1098,6 +1167,9 @@ void loop()
       case 'o': lightTurnOffMicroseconds  = 1000;  break;  // reset to default max light-on time
       case 'p': lightTurnOffMicroseconds += 500;  break;  // extend max light-on time
 
+      case 'm': emitAllZones = true;  break;  // stream full 8×8 zone frames (x1/x2/x3 lines)
+      case 'c': emitAllZones = false; break;  // compact only — suppress zone frames
+
       case 'f': serialOutputEnabled = false;           break;
       case 'z': deactivateLights(); autoLights = 0; resetFunc(); break;
 
@@ -1107,6 +1179,7 @@ void loop()
         activateLight(lightOn);
         lightStartTime = currentTime;
         reportState(currentTime, buttonRaw1, buttonRaw2);
+        if (emitAllZones) reportZones(currentTime);
         break;
 
 #if USE_ETHERNET
@@ -1155,7 +1228,10 @@ void loop()
 #endif
 
       if (serialOutputEnabled)
+      {
         reportState(currentTime, buttonRaw1, buttonRaw2);
+        if (emitAllZones) reportZones(currentTime);
+      }
     }
   }
 
