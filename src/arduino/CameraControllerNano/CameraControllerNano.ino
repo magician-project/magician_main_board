@@ -15,11 +15,60 @@
 #define USE_ETHERNET 1
 #define DEBUG_ETHERNET 0
 
+// =============================================================================
+//  ALLOW_ALWAYS_ON_LIGHTS - LED SAFETY GATE
+//
+//  0 (default) - a light can never be driven for longer than
+//                LIGHT_TURNOFF_US_MAX in one go. 'o' restores that bounded
+//                default instead of removing the limit, 'p' is clamped to it, and
+//                lightTurnOffMicrosecond can never be set to 0.
+//
+//  1           - historical Nano behaviour: lightTurnOffMicrosecond starts at 0
+//                and 'o' returns it to 0, meaning each light stays on
+//                CONTINUOUSLY until the next light change (~lightDurationMsec,
+//                i.e. ~100 ms, roughly 17% duty per LED).
+//
+//  Set to 1 ONLY for the original Nano rig, whose IRFZ44N low-side switches drive
+//  LEDs at their rated voltage and tolerate continuous drive. Leave it at 0 for
+//  any board carrying the overvolted COBs used on MagicianCam4 - those survive
+//  only because they are strobed, and ~17% duty destroys them.
+//
+//  !! FUNCTIONAL CONSEQUENCE OF THE DEFAULT !!
+//  This board has NO camera exposure input, so a bounded pulse is not
+//  synchronised to the shutter: the light fires when the command is processed,
+//  not when the sensor is integrating. With ALLOW_ALWAYS_ON_LIGHTS at 0 the
+//  frames will therefore be dark or partially lit. The safe default is safe, not
+//  useful for capture - if this rig is being used to record with normal LEDs, set
+//  it to 1 deliberately. Exposure-gated strobing needs the MagicianCam4 hardware.
+// =============================================================================
+#define ALLOW_ALWAYS_ON_LIGHTS 0
+
+// Maximum microseconds a single light may be driven when the gate above is 0.
+// Matches LIGHT_HARD_MAX_ON_US in MagicianCam4 Rev 1.33.
+#define LIGHT_TURNOFF_US_MAX 1000
+
 #define NUMBER_OF_LIGHTS 6
 #define NUMBER_OF_DISTANCE_SENSORS 3
 
+// =============================================================================
+//  VERSION NUMBERING - LOAD-BEARING, DO NOT BUMP THE MAJOR
+//
+//  The host (magician_grabber) decides which command set a board can be given by
+//  parsing this banner. Its rule is:
+//
+//      exposure-locked capable  <=>  major > 1 || (major == 1 && minor >= 33)
+//
+//  The Nano line is permanently reserved to 0.x and must never exceed 0.99, which
+//  is what keeps it on the legacy command path. This is not cosmetic: the newer
+//  commands are multi-character ('S031425'), and a board that consumes one byte
+//  per command would execute their individual characters as separate legacy
+//  commands -- '0' is ALL LIGHTS OFF and '3' selects light 3. Announcing 1.x here
+//  would make the host scramble this board rather than simply not use the feature.
+//
+//  The Pico 2 / MagicianCam4 line owns 1.x and above.
+// =============================================================================
 #define VERSION_MAJOR 0
-#define VERSION_MINOR 28
+#define VERSION_MINOR 29
 
 // I2C communication
 #define SDA_PIN A4
@@ -68,11 +117,39 @@ const unsigned char laserSwitch[NUMBER_OF_DISTANCE_SENSORS]={A0,A1,A2}; //Ports 
 bool serialOutputEnabled             = false;
 unsigned int loopRateMsec            = 10;  // 1000ms = 1Hz / 20ms = 50Hz / -> 10ms = 100Hz 
 unsigned int lightDurationMsec       = 100; // milliseconds that each light remains activated by default
-unsigned int lightTurnOffMicrosecond = 0;   // If not zero ensures that each light remains powered for no more than this time
+// Microseconds a light stays powered per activation. 0 means "no limit", i.e. the
+// light remains on until the next light change - only reachable when
+// ALLOW_ALWAYS_ON_LIGHTS is 1. Guarding only the 'o' command would be cosmetic if
+// the boot value were still 0, so the initialiser is gated too.
+#if ALLOW_ALWAYS_ON_LIGHTS
+unsigned int lightTurnOffMicrosecond = 0;
+#else
+unsigned int lightTurnOffMicrosecond = LIGHT_TURNOFF_US_MAX;
+#endif
 //-------------------------------------------------------
 unsigned char digitizeAnalog  = 1; //By default make buttons 1/0
-unsigned char autoLights      = 0; //By default use time out 
+unsigned char autoLights      = 0; //By default use time out
 unsigned char lightOn         = NO_LIGHT_ON; //Start at first light
+//-------------------------------------------------------
+// autoLights says WHO advances the light, lightPattern says WHAT order it walks.
+// These used to be one variable, and 'case +' set it to 0 before passing it to
+// getNextLight() as the pattern -- so host-stepped capture was always plain
+// round-robin and the 't' alternating-pair mode was silently overwritten by the
+// first '+' the host sent. Split, matching MagicianCam4 Rev 1.33.
+unsigned char lightPattern    = 0; //0 = round robin, 3 = opposite pairs
+//-------------------------------------------------------
+// Strobe accounting - the host's ground-truth join key, same fields and same
+// column positions as MagicianCam4 Rev 1.33 so both boards produce an identical
+// controller.csv schema. strobeCounter lets the host notice a dropped or doubled
+// step command, which matters more here than on the Pico: this board has an
+// 8-byte serial RX buffer and loses bytes if the host bursts commands at it.
+unsigned long strobeCounter   = 0;
+unsigned char strobeLight     = NO_LIGHT_ON;
+//-------------------------------------------------------
+// Set while discarding the payload of a command this firmware does not implement
+// (see the 'S'/'E' cases). Without it, sending a Rev 1.33 command to this board
+// would execute the digits inside it as light commands.
+unsigned char swallowUntilNewline = 0;
 //-------------------------------------------------------
 unsigned long lastUpdateTime = 0;
 unsigned long lightStartTime = 0;
@@ -388,6 +465,8 @@ void activateLight(unsigned char lightToActivate)
   uint8_t lightState = (1 << lightToActivate);  // Only one light on at a time
   updateShiftRegister(lightState);
   lightOn=lightToActivate % NUMBER_OF_LIGHTS;
+  strobeLight = lightOn;   //a light really went on, record which
+  strobeCounter++;
  } else
  {
   //Not using 74HC595
@@ -399,9 +478,11 @@ void activateLight(unsigned char lightToActivate)
   {
      //Safe guard against "disabled states"
   } else
-  { 
+  {
     lightOn=lightToActivate % NUMBER_OF_LIGHTS;
     digitalWrite(directLightControl[lightToActivate % NUMBER_OF_LIGHTS], HIGH);
+    strobeLight = lightOn;   //a light really went on, record which
+    strobeCounter++;
   }
  }
 
@@ -467,16 +548,28 @@ unsigned char chooseClosestLight(const unsigned short * depths)
 #endif
 
 
-unsigned char getNextLight(const unsigned char currentLight, const char numberOfLights, const char lightMode)
+// Return the next light index for the given pattern.
+//   pattern 0/1 - plain round robin  0,1,2,3,4,5
+//   pattern 3   - opposite pairs     0,3,1,4,2,5 (a single 6-cycle, not a swap:
+//                 it still visits every light once, but each consecutive pair comes
+//                 from opposing sides of the ring)
+//
+// currentLight may legitimately be NO_LIGHT_ON (16) after deactivateLights(). The
+// old code fell through every case and returned 16 unchanged, which activateLight()
+// then rejected as out of range - so after '0' the board simply stopped lighting
+// anything. Restart the cycle instead. Matches MagicianCam4 Rev 1.33.
+unsigned char getNextLight(const unsigned char currentLight, const char numberOfLights, const char pattern)
 {
-  switch (lightMode)
+  if (currentLight >= (unsigned char) numberOfLights) { return 0; }
+
+  switch (pattern)
       {
-        case 0: //If light mode is 0 or 1
+        case 0: //If pattern is 0 or 1
         case 1:
-          return (currentLight + 1) % numberOfLights; 
+          return (currentLight + 1) % numberOfLights;
         break;
         //-------------------------------------------
-        case 3: // If light mode is 3
+        case 3: // If pattern is 3
          switch (currentLight)
           {
            case 0: return 3; break;
@@ -489,7 +582,7 @@ unsigned char getNextLight(const unsigned char currentLight, const char numberOf
         break;
         //-------------------------------------------
       };
-   return currentLight;
+   return (currentLight + 1) % numberOfLights;
 }
 
 
@@ -764,13 +857,32 @@ void reportState(unsigned long currentTime,unsigned int buttonRaw1,unsigned int 
                comma();
              }
              //-------------------------------------------------------------------------------
-             for (i = 0; i < NUMBER_OF_LIGHTS; i++) 
+             for (i = 0; i < NUMBER_OF_LIGHTS; i++)
              {
                if(i!=lightOn) { zero(); } else
                               { one();  }
                if (i!=NUMBER_OF_LIGHTS-1)
                               { comma(); }
              }
+            //-------------------------------------------------------------------------------
+            // Trailing fields, same order and meaning as MagicianCam4 Rev 1.33, so that
+            // controller.csv has one schema regardless of which board produced it:
+            //   StrobeCounter  - monotonic count of lights actually switched on. The host
+            //                    joins camera frames to lights on this rather than on
+            //                    timestamps. A jump of 2 means a step command was doubled;
+            //                    no change across frames means one was dropped.
+            //   StrobeLight    - the light that actually went on (0-5), 16 if none.
+            //   Substitutions / Starved / WatchdogTrips - always 0 here. This board has no
+            //                    per-COB thermal budget and no exposure-gating watchdog, so
+            //                    the columns exist purely to keep the schema identical.
+             comma(); Serial.print(strobeCounter);
+             #if USE_ETHERNET
+              ethPrint(strobeCounter);
+             #endif
+             comma(); number((int)strobeLight);
+             comma(); zero();   //Substitutions
+             comma(); zero();   //Starved
+             comma(); zero();   //WatchdogTrips
             //-------------------------------------------------------------------------------
              newline();
              flush();
@@ -782,7 +894,12 @@ void reportState(unsigned long currentTime,unsigned int buttonRaw1,unsigned int 
 //                                 LOOP
 //--------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------
-void loop() 
+// Declared explicitly rather than relying on the IDE's automatic prototype
+// generation, which does not always handle the reference parameter below.
+void handleCommand(char receivedChar, unsigned long &currentTime, unsigned int buttonRaw1, unsigned int buttonRaw2);
+void processTimedLights(unsigned long currentTime, unsigned int buttonRaw1, unsigned int buttonRaw2);
+
+void loop()
 {
   unsigned long currentTime = millis();
 
@@ -809,20 +926,18 @@ void loop()
   }
 
 
-  char receivedChar = 0;
-
   #if USE_ETHERNET
   // Accept new client connections or drop disconnected ones
-  if (client && !client.connected()) 
+  if (client && !client.connected())
   {
     client.stop();   // Cleanly close
     client = EthernetClient(); // Reset to empty
   }
 
-  if (!client) 
+  if (!client)
   {
     EthernetClient newClient = server.available();
-    if (newClient) 
+    if (newClient)
     {
       client = newClient;
       client.flush(); // Optional: clear any junk input
@@ -830,22 +945,54 @@ void loop()
     }
   }
 
-  // Read from Ethernet if connected
-  if (client && client.available() > 0) 
+  // Drain everything waiting on Ethernet, then everything waiting on Serial.
+  //
+  // This used to take a SINGLE byte per loop pass, and let Serial overwrite the
+  // Ethernet byte read in the same pass, silently discarding it. One byte per pass
+  // is particularly bad on this board: the RX buffer is only 8 bytes (see the note
+  // at the top about SERIAL_RX_BUFFER_SIZE), so a host that sends commands faster
+  // than ~1/ms overflows it and the light sequence falls permanently behind with no
+  // way to catch up. Draining fully each pass costs nothing and removes the limit.
+  while (client && client.available() > 0)
   {
-    receivedChar = client.read();
-  }  
+    handleCommand((char) client.read(), currentTime, buttonRaw1, buttonRaw2);
+  }
 #endif
 
+  while (Serial.available() > 0)
+  {
+    handleCommand((char) Serial.read(), currentTime, buttonRaw1, buttonRaw2);
+  }
 
-  
-  if (Serial.available() > 0) 
-  { 
-    receivedChar = Serial.read(); 
-  } 
+  processTimedLights(currentTime, buttonRaw1, buttonRaw2);
 
-  // Check for serial input
-  if (receivedChar != 0) 
+  int sleepDelay = (CPUSleepTimeMilliseconds*1000) - lightTurnOffMicrosecond;
+  if (sleepDelay > 0) {
+                        delayMicroseconds(sleepDelay);
+                      }
+}
+
+
+// Handle one received command byte.
+//
+// Single characters only. This board cannot support the multi-character commands
+// that MagicianCam4 Rev 1.33 added ('S' schedule upload, 'E' light-on ceiling):
+// its 8-byte RX buffer cannot hold them and there is no RAM for a line assembler.
+// They are recognised and their payload discarded, so that sending one here is
+// merely ignored rather than executed digit by digit as light commands.
+void handleCommand(char receivedChar, unsigned long &currentTime, unsigned int buttonRaw1, unsigned int buttonRaw2)
+{
+    if (receivedChar == 0) { return; }
+
+    // Discarding the tail of an unimplemented command
+    if (swallowUntilNewline)
+    {
+      if (receivedChar == '\n' || receivedChar == '\r') { swallowUntilNewline = 0; }
+      return;
+    }
+
+    if (receivedChar == '\n' || receivedChar == '\r') { return; }
+
     {
         switch (receivedChar)
         {
@@ -872,14 +1019,41 @@ void loop()
                                    //Serial.flush();
                                    //delay(1000); //Give some time to the receiver to not miss the first broadcast
           break;
-          case 'o': lightTurnOffMicrosecond  = 0;   break; //Pulse lights
-          case 'p': lightTurnOffMicrosecond += 500; break; //Pulse lights
-          case 'b': digitizeAnalog=1; break; 
-          case 'n': digitizeAnalog=0; break; 
-          case 'r': autoLights=1; lightOn = 0; break; 
-          case 'a': autoLights=2; break; 
-          case 't': autoLights=3; lightOn = 0; break; 
-          case 'y': autoLights=4; lightOn = 0; break; 
+          // 'o' restores the default light-on time, 'p' extends it by 500us.
+          //
+          // Behaviour depends on ALLOW_ALWAYS_ON_LIGHTS (see the top of this file):
+          //   gate 0 - 'o' restores the bounded LIGHT_TURNOFF_US_MAX and 'p' is
+          //            clamped to it, so no command sequence can reach continuous
+          //            drive. This matches MagicianCam4 Rev 1.33, where 'o' also
+          //            means "restore the safe cap".
+          //   gate 1 - historical behaviour: 'o' sets 0, meaning NO limit, and 'p'
+          //            grows without bound. Note this is the exact OPPOSITE sense
+          //            of 'o' on MagicianCam4 - do not assume a script that sends
+          //            'o' means the same thing on both boards.
+          case 'o':
+            #if ALLOW_ALWAYS_ON_LIGHTS
+              lightTurnOffMicrosecond = 0;                     //no limit
+            #else
+              lightTurnOffMicrosecond = LIGHT_TURNOFF_US_MAX;  //restore bounded default
+            #endif
+          break;
+          case 'p':
+            lightTurnOffMicrosecond += 500;
+            #if !ALLOW_ALWAYS_ON_LIGHTS
+              //Unbounded growth here is the same hazard as removing the limit
+              //outright, just reached more slowly.
+              if (lightTurnOffMicrosecond > LIGHT_TURNOFF_US_MAX)
+                 { lightTurnOffMicrosecond = LIGHT_TURNOFF_US_MAX; }
+            #endif
+          break;
+          case 'b': digitizeAnalog=1; break;
+          case 'n': digitizeAnalog=0; break;
+          // Pattern and stepping are separate now, so 'r'/'t' survive a later '+'
+          // instead of being overwritten by it.
+          case 'r': lightPattern=0; autoLights=1; lightOn = 0; break;
+          case 't': lightPattern=3; autoLights=1; lightOn = 0; break;
+          case 'a': autoLights=2; break;
+          case 'y': autoLights=4; lightOn = 0; break;
           case 'z': deactivateLights(); lightOn=NO_LIGHT_ON; autoLights=0; resetFunc(); break;
           case '0': deactivateLights(); lightOn=NO_LIGHT_ON; autoLights=0; break; 
           case '1': activateLight(0);   lightOn=0; autoLights=0; break; 
@@ -899,19 +1073,46 @@ void loop()
           #endif
           case 'f': serialOutputEnabled = false; break;
           case '+': autoLights=0;
-                    //lightOn = (lightOn + 1) % NUMBER_OF_LIGHTS;
-                    lightOn = getNextLight(lightOn,NUMBER_OF_LIGHTS,autoLights);
+                    //Pattern comes from lightPattern, NOT from the autoLights we
+                    //just zeroed - that was the bug that made 't' a no-op.
+                    lightOn = getNextLight(lightOn,NUMBER_OF_LIGHTS,lightPattern);
                     activateLight(lightOn);
                     lightStartTime = currentTime;//New light just started
                     reportState(currentTime,buttonRaw1,buttonRaw2);
           break;
+
+          // Rev 1.33 commands this board cannot implement. Recognised so their
+          // payload is swallowed rather than executed as light commands:
+          //   S<digits> schedule upload - no RAM for a schedule, 8-byte RX buffer
+          //   E<us>     light-on ceiling - no exposure input to gate against
+          case 'S':
+          case 'E': swallowUntilNewline = 1; break;
+
+          // 'e' (exposure-locked sequencing) needs a camera exposure input, which
+          // this board does not have. Answer explicitly so the host is never left
+          // guessing whether the mode took effect.
+          case 'e': Serial.println(F("E:NOEXP")); break;
+
+          // Status, mirroring MagicianCam4's 'Q' with the fields that apply here.
+          case 'Q':
+            Serial.print(F("ON="));     Serial.print(lightTurnOffMicrosecond);
+            Serial.print(F(" ALWAYSON=")); Serial.print((int)ALLOW_ALWAYS_ON_LIGHTS);
+            Serial.print(F(" STROBE=")); Serial.print(strobeCounter);
+            Serial.print(F(" LIGHT="));  Serial.print((int)strobeLight);
+            Serial.print(F(" PATTERN="));Serial.print((int)lightPattern);
+            Serial.print(F(" AUTO="));   Serial.println((int)autoLights);
+            break;
         };
     }
+}
 
 
-
+// Timer-driven light cycling and periodic reporting, unchanged in behaviour;
+// split out of loop() so the command reader above could become a drain loop.
+void processTimedLights(unsigned long currentTime, unsigned int buttonRaw1, unsigned int buttonRaw2)
+{
    // Ensure loop runs at ~50Hz
-   if (currentTime - lastUpdateTime >= loopRateMsec) 
+   if (currentTime - lastUpdateTime >= loopRateMsec)
     {
         lastUpdateTime = currentTime;
 
@@ -926,16 +1127,16 @@ void loop()
         {
             lightStartTime = currentTime;  // Reset light timer
 
-            if ( (autoLights==1) || (autoLights>=3) )
-            { 
-             // Update light index
-             //lightOn = (lightOn + 1) % NUMBER_OF_LIGHTS;
-             lightOn = getNextLight(lightOn,NUMBER_OF_LIGHTS,autoLights);
+            if ( (autoLights==1) || (autoLights==4) )
+            {
+             // Update light index. Order comes from lightPattern now, not from
+             // autoLights - those two used to be the same variable.
+             lightOn = getNextLight(lightOn,NUMBER_OF_LIGHTS,lightPattern);
              activateLight(lightOn);
 
              if ( (autoLights==4) && (currentTime > 10000) )
-             { 
-                //When the light sensor is turned on it begins flashing 
+             {
+                //When the light sensor is turned on it begins flashing
                 //for 10 seconds, then it turns off!
                 autoLights = 0;
                 deactivateLights();
@@ -950,7 +1151,7 @@ void loop()
             #endif
 
             //Serial Output--------------------------------
-            if (serialOutputEnabled) 
+            if (serialOutputEnabled)
             {
               reportState(currentTime,buttonRaw1,buttonRaw2);
             }
@@ -958,10 +1159,4 @@ void loop()
         }
       }
     }
-   
-  
-  int sleepDelay = (CPUSleepTimeMilliseconds*1000) - lightTurnOffMicrosecond;
-  if (sleepDelay > 0) {
-                        delayMicroseconds(sleepDelay);
-                      }
 }
