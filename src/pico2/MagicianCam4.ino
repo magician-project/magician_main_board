@@ -33,6 +33,13 @@
 //  Nothing of the 1.5/1.6 ISR architecture was changed by this merge: the ToF
 //  and push-button interrupt paths are untouched.
 //
+//  ##  VL53L5CX LIBRARY PATCH  ##
+//  Built against a patched Adafruit_VL53L5CX 1.0.1. The patched sources and
+//  install instructions are in VL53L5CX_lib_patch/ next to this sketch; they add
+//  I2C retries in the platform layer and retry paths around the 0x000F boot
+//  transition and the FW-access enable in vl53l5cx_init(). Stock library builds
+//  and runs, but is less tolerant of a sensor that boots slowly.
+//
 //  ##  SAFETY-CRITICAL NOTE — READ BEFORE MODIFYING LIGHT CONTROL  ##
 //  The LED COBs on GP6–GP11 are driven ABOVE their rated voltage. They survive
 //  only because they are strobed: every pulse is bounded in width, and the
@@ -84,10 +91,15 @@
 //    GP12 — VL53L5CX ToF#1 INT signal (active-low input, ext. pull-up of 4.7K on the sensor's micro-board)
 //    GP13 — VL53L5CX ToF#2 INT signal (active-low input, ext. pull-up of 4.7K on the sensor's micro-board)
 //    GP14 — VL53L5CX ToF#3 INT signal (active-low input, ext. pull-up of 4.7K on the sensor's micro-board)
-//    GP20 — MCP23018 INTA original board route, currently broken/high-Z on the Pico 2 board
+//    GP20 — MCP23018 INTA (active-low input, push-pull driven)
 //    GP21 — MCP23018 INTB (active-low input, push-pull driven)
 //    GP22 — W5500INT (active-low input, ext. pull-up of 4.7K in the W5500 Lite board)
-//    GP28 — MCP23018 INTA redirected via Y connection, active-low input, push-pull driven
+//
+//  Board variant — Giovinazzo debug board only:
+//    GP3 and GP20 are broken on that Pico 2 socket and are re-routed with two
+//    "Y" wires behind the RPY board to GP1 (MCP23018 reset) and GP28 (INTA).
+//    To build for it, set MCP23018_RESET_PIN 1 and MCP23018_INTA_PIN 28.
+//    Everything above describes the standard MagicianCam4 wiring.
 //
 //  MCP23018 I/O Expander Port A Specification and Distinction:
 //    GPA0 — Push Button 0 (active-low input, int. pull-up)
@@ -158,8 +170,11 @@
 //  MCP23018 I²C port expander
 // =============================================================================
 #define MCP23018_ADDR      0x20  // 7-bit address; hardware pins A2=A1=A0=GND
-#define MCP23018_RESET_PIN 1     // GP3  — push-pull — active-low hardware reset --> 3 std, 1 dbg for the CRF board
-#define MCP23018_INTA_PIN  28    // GP28 — MCP23018 INTA via Y connection; GP20 board path is broken/high-Z
+// Standard board wiring (FORTH / Altinay). The Giovinazzo debug board has GP3 and
+// GP20 broken and re-routes them with "Y" wires on the RPY socket to GP1 and GP28;
+// for that board, and only for that board, use 1 and 28 here instead of 3 and 20.
+#define MCP23018_RESET_PIN 3     // GP3  — push-pull — active-low hardware reset (Giovinazzo dbg board: 1)
+#define MCP23018_INTA_PIN  20    // GP20 — push-pull — active-low interrupt A     (Giovinazzo dbg board: 28)
 #define MCP23018_INTB_PIN  21    // GP21 — push-pull — active-low interrupt B
 
 // MCP23018 register addresses — IOCON.BANK=0 (sequential / paired layout, power-on default)
