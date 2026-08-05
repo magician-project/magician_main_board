@@ -95,7 +95,8 @@
 //    GP21 — MCP23018 INTB (active-low input, push-pull driven)
 //    GP22 — W5500INT (active-low input, ext. pull-up of 4.7K in the W5500 Lite board)
 //
-//  Board variant — Giovinazzo debug board only:
+//    This should be removed: after fixing
+//    Board variant — Giovinazzo debug board only:
 //    GP3 and GP20 are broken on that Pico 2 socket and are re-routed with two
 //    "Y" wires behind the RPY board to GP1 (MCP23018 reset) and GP28 (INTA).
 //    To build for it, set MCP23018_RESET_PIN 1 and MCP23018_INTA_PIN 28.
