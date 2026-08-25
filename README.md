@@ -4,6 +4,8 @@
 
 This project implements a **multi-laser distance sensing and light control system** on an **Arduino Nano (ATmega328P)**. 
 
+> This README documents the original [`src/kicad/v1`](src/kicad/v1/README.md) board and its Arduino Nano firmware. The current hardware revision is **MagicianCam4** ([`src/kicad/v4`](src/kicad/v4/README.md)), built around a Raspberry Pi Pico 2 with a VL53L5CX multizone ToF sensor; its firmware lives in [`src/pico2`](src/pico2/).
+
 The software that drives this PCB (along with the Camera/ATI/Teensy) is the [Magician Grabber](https://github.com/magician-project/magician_grabber)
 
 It integrates:
