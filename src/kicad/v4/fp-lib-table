@@ -1,0 +1,4 @@
+(fp_lib_table
+	(version 7)
+	(lib (name "CSE") (type "KiCad") (uri "D:/Work/KiCad/CSE Lib/CSE-footprints.pretty") (options "") (descr ""))
+)
