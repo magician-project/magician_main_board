@@ -1,7 +1,7 @@
 // =============================================================================
 //  CameraControllerMultizone — Raspberry Pi Pico 2 (RP2350)
 //  HW version: MagicianCam4 — Rev. 1.3
-//  SW version: 1.64
+//  SW version: 1.65
 //
 //  Release 1.5 notes:
 //    - Added boot-state aware VL53L5CX initialization.
@@ -109,6 +109,20 @@
 //      Functional behaviour remains unchanged; only command-consumption
 //      scheduling has been improved.
 //
+//  Release 1.65 notes:
+//    - Explicit light-select commands '1'..'6' now emit a reportState() line,
+//      exactly like '+'. Previously they were silent, and because they also set
+//      autoLights = STEP_EXTERNAL they stopped the timed auto-report that 'i'
+//      had started. A host stepping by digit (magician_grabber with --skip and
+//      no --skipadvance, or its legacy polarization driver) therefore received
+//      no distances, buttons or strobe ground truth after its first frame, and
+//      its reported Arduino rate decayed as N/t.
+//
+//    - Cost per digit is now the same as per '+' (one report, ~4.3 ms worst
+//      case). Like '+', the report is not gated by serialOutputEnabled.
+//
+//    - '0' (all lights off) remains silent.
+//
 //  Hardware summary
 //  ─────────────────────────────────────────────────────────────────────────
 //  I²C bus (GP4 SDA / GP5 SCL)
@@ -184,7 +198,7 @@
 //  Version
 // =============================================================================
 #define VERSION_MAJOR 1
-#define VERSION_MINOR 64
+#define VERSION_MINOR 65
 
 // =============================================================================
 //  Debug macros
@@ -2781,12 +2795,15 @@ static void handleCommand(const char *line, uint8_t len, unsigned long &currentT
       break;
 
     case '0': deactivateLights(); autoLights = STEP_EXTERNAL;                break;
-    case '1': activateLight(0);   autoLights = STEP_EXTERNAL;                break;
-    case '2': activateLight(1);   autoLights = STEP_EXTERNAL;                break;
-    case '3': activateLight(2);   autoLights = STEP_EXTERNAL;                break;
-    case '4': activateLight(3);   autoLights = STEP_EXTERNAL;                break;
-    case '5': activateLight(4);   autoLights = STEP_EXTERNAL;                break;
-    case '6': activateLight(5);   autoLights = STEP_EXTERNAL;                break;
+
+    // '1'..'6' name the next COB explicitly (the host's --skip path). They take over
+    // stepping exactly like '+', so they must also report like '+' — otherwise the
+    // host loses distances/buttons for the whole run.
+    case '1': case '2': case '3': case '4': case '5': case '6':
+      activateLight((uint8_t)(line[0] - '1'));
+      autoLights = STEP_EXTERNAL;
+      reportState(currentTime, buttonRaw1, buttonRaw2);
+      break;
 
     // Pattern selection is now independent of who does the stepping, so 'r'/'t'
     // survive a subsequent '+' instead of being silently overwritten by it.
