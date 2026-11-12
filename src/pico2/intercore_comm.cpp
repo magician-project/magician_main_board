@@ -45,6 +45,17 @@ std::atomic<uint32_t> exposureGuardrailTimeoutCount{0};
 std::atomic<uint32_t> exposureCycleCompleteCount{0};
 
 // -----------------------------------------------------------------------------
+// Host-Adjustable Light Limits & Strobe Ground Truth (Rev 2.2)
+// -----------------------------------------------------------------------------
+std::atomic<uint32_t> lightOnCeilingUs{LIGHT_TURNOFF_US};
+std::atomic<uint32_t> lightMaxConsecutiveActivations{MAX_CONSECUTIVE_ACTIVATIONS_OF_LIGHT};
+std::atomic<uint32_t> lightLastStrobeLight{NO_LIGHT_ON};
+std::atomic<uint32_t> lightForcedAdvanceCount{0};
+std::atomic<uint32_t> lightStarvedCount{0};
+uint8_t core1PendingSchedule[LIGHT_SCHEDULE_MAX_LENGTH];
+std::atomic<uint32_t> core1PendingScheduleLength{0};
+
+// -----------------------------------------------------------------------------
 // Seqlock Atomic Snapshots
 // -----------------------------------------------------------------------------
 Core1ToCore0RecommendationSnapshot core1RecommendationSnapshot;

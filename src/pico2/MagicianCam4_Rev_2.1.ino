@@ -171,6 +171,17 @@ static void core0TryDequeueCommand()
       core0AdvanceLightCommandConsumeCount.fetch_add(1, std::memory_order_release);
       break;
 
+    case CORE_COMMAND_EXPOSURE_LOCKED:
+      enterExposureLockedMode();
+      break;
+
+    case CORE_COMMAND_SET_SCHEDULE:
+    {
+      uint32_t length = core1PendingScheduleLength.load(std::memory_order_acquire);
+      setLightSchedule(core1PendingSchedule, length);
+      break;
+    }
+
     case CORE_COMMAND_RESET_REQUEST:
       autoLights = STEP_EXTERNAL;
       softwareResetRequested = true;

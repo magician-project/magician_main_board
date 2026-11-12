@@ -27,7 +27,8 @@ enum ApplicationReportSensorState : uint32_t
 enum Core1ApplicationReportMode : uint8_t
 {
   CORE1_REPORT_MODE_TIMER = 0, ///< Report emitted on active COB change
-  CORE1_REPORT_MODE_DEPTH = 1  ///< Report emitted periodically every lightDurationMsec
+  CORE1_REPORT_MODE_DEPTH = 1, ///< Report emitted periodically every lightDurationMsec
+  CORE1_REPORT_MODE_STROBE = 2 ///< Report emitted once per exposure strobe ('e' mode)
 };
 
 /// @brief Coordinated 3-stage reboot state machine.

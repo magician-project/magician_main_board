@@ -91,7 +91,7 @@
 // =============================================================================
 //  Feature Flags & Versioning
 // =============================================================================
-#define VERSION_STRING                "2.1"
+#define VERSION_STRING                "2.2"
 #define USE_VL53L5CX                  1   // Enable 3x VL53L5CX Time-of-Flight subsystem
 #define USE_W5500                     1   // Enable W5500 Lite Ethernet SPI0 subsystem
 #define ENABLE_LASER_LIGHT_DECISION   1   // Enable automatic depth-based COB recommendations
@@ -273,6 +273,14 @@ void core0QueueOutputValue(int value);
 #define LIGHT_TURNOFF_US                  1000  // Stage 2: Guardrail maximum ON timeout (1000 us from t0)
 #define LIGHT_CYCLE_PERIOD_US             40000 // Stage 3: Minimum cycle period (40000 us from t0, <= 25 Hz)
 #define LIGHT_ALL_PINS_MASK               0x0FC0u // SIO bitmask for COB pins GP6..GP11: (0x3F << 6)
+
+// Host-adjustable light limits (Rev 2.2):
+#define LIGHT_ON_CEILING_MIN_US           50    // 'E<us>' lower clamp (must stay > LIGHT_FALL_ARM_DELAY_US)
+                                                // 'E<us>' upper clamp is LIGHT_TURNOFF_US
+#define MAX_CONSECUTIVE_ACTIVATIONS_OF_LIGHT 12 // 'N<n>' hard ceiling and boot default: the same COB
+                                                // never fires more than this many exposures in a row
+#define LIGHT_SCHEDULE_MAX_LENGTH         60    // 'S<digits>' maximum number of schedule entries
+#define COMMAND_LINE_MAX_LENGTH           72    // Longest multi-character command line ('E','N','S')
 
 // =============================================================================
 //  W5500 Ethernet SPI Architecture & Network Configuration

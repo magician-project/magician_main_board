@@ -32,6 +32,7 @@ enum LightCycleState : uint32_t
 #define STEP_TIMER    1 ///< Advance light automatically every lightDurationMsec
 #define STEP_DEPTH    2 ///< Re-evaluate light from ToF depths every lightDurationMsec
 #define STEP_TIMED    4 ///< Advance light on timer with 10s auto-stop
+#define STEP_EXPOSURE 8 ///< Advance light through the schedule once per exposure, inside the ISR ('e')
 
 #define PATTERN_ROUNDROBIN 0 ///< Step sequentially through adjacent COBs: 0,1,2,3,4,5
 #define PATTERN_OPPOSITE   3 ///< Step across opposing COBs: 0,3,1,4,2,5
@@ -55,6 +56,8 @@ void initLightController();
 void activateLight(uint8_t lightIdx);
 void deactivateLights();
 uint8_t getNextLight(uint8_t current, uint8_t total, uint8_t pattern);
+void setLightSchedule(const uint8_t *schedule, uint32_t length);
+void enterExposureLockedMode();
 
 void __not_in_flash_func(exposureISR)();
 void __not_in_flash_func(lightHardwareTimerCallback)(uint alarm_num);

@@ -186,15 +186,25 @@ void core1RefreshApplicationReportState(uint32_t currentTime)
   }
 }
 
-/// @brief Formats and directly transmits 12-field CSV: timestamp,b1,b2,d0,d1,d2,L0,L1,L2,L3,L4,L5.
+/// @brief Formats and directly transmits the 17-field CSV:
+///        timestamp,b1,b2,d0,d1,d2,L0..L5,StrobeCounter,StrobeLight,ForcedAdvances,Starved,WatchdogTrips
+/// @note StrobeLight is 0-indexed, -1 before the first strobe. In strobe mode ('e') L0..L5 also show the
+///       COB that fired; in the other modes they show the selected COB. WatchdogTrips is always 0 (no
+///       host-timeout watchdog yet); the column is kept so the row matches the grabber's layout.
 void core1PrintApplicationReport(Core1OutputTarget target)
 {
-  char csvLine[128];
+  char csvLine[160];
+
+  uint32_t strobeCounter = exposurePulseCount.load(std::memory_order_acquire);
+  uint32_t strobeLight = lightLastStrobeLight.load(std::memory_order_relaxed);
+  uint32_t forcedAdvances = lightForcedAdvanceCount.load(std::memory_order_relaxed);
+  uint32_t starved = lightStarvedCount.load(std::memory_order_relaxed);
 
   uint32_t timestamp = core1ApplicationReportState.timestampMs;
   uint32_t button1 = core1ApplicationReportState.button1;
   uint32_t button2 = core1ApplicationReportState.button2;
   uint32_t activeLight = core1ApplicationReportState.activeLight;
+  if (core1ApplicationReportMode == CORE1_REPORT_MODE_STROBE) activeLight = strobeLight;
 
   int offset = snprintf(csvLine, sizeof(csvLine), "%lu,%lu,%lu,", 
                         (unsigned long)timestamp, (unsigned long)button1, (unsigned long)button2);
@@ -238,9 +248,8 @@ void core1PrintApplicationReport(Core1OutputTarget target)
 
   for (uint8_t light = 0; light < NUMBER_OF_LIGHTS; light++)
   {
-    int written = snprintf(csvLine + offset, sizeof(csvLine) - (size_t)offset, "%c%s",
-                           (light == activeLight) ? '1' : '0',
-                           (light != NUMBER_OF_LIGHTS - 1) ? "," : "\r\n");
+    int written = snprintf(csvLine + offset, sizeof(csvLine) - (size_t)offset, "%c,",
+                           (light == activeLight) ? '1' : '0');
 
     if (written <= 0 || (size_t)(offset + written) >= sizeof(csvLine))
     {
@@ -248,6 +257,16 @@ void core1PrintApplicationReport(Core1OutputTarget target)
     }
     offset += written;
   }
+
+  int written = snprintf(csvLine + offset, sizeof(csvLine) - (size_t)offset, "%lu,%ld,%lu,%lu,0\r\n",
+                         (unsigned long)strobeCounter,
+                         (strobeLight < NUMBER_OF_LIGHTS) ? (long)strobeLight : -1L,
+                         (unsigned long)forcedAdvances, (unsigned long)starved);
+  if (written <= 0 || (size_t)(offset + written) >= sizeof(csvLine))
+  {
+    return;
+  }
+  offset += written;
 
   core1SendDirectText(target, csvLine, (uint16_t)offset);
 }
@@ -339,6 +358,14 @@ void core1ProcessApplicationReporting()
   uint32_t core1ReportTime = applicationMillis();
   core1RefreshApplicationReportState(core1ReportTime);
 
+  static uint32_t core1LastReportedStrobeEvents = 0;
+  uint32_t strobeEvents = exposurePulseCount.load(std::memory_order_acquire) +
+                          lightStarvedCount.load(std::memory_order_relaxed);
+  if ((core1ApplicationReportMode != CORE1_REPORT_MODE_STROBE) || !core1ApplicationReportingEnabled)
+  {
+    core1LastReportedStrobeEvents = strobeEvents; // Only strobes after entering 'e' are reported
+  }
+
   if (core1AdvanceReportPending)
   {
     uint32_t advanceConsumeCount = core0AdvanceLightCommandConsumeCount.load(std::memory_order_acquire);
@@ -371,7 +398,18 @@ void core1ProcessApplicationReporting()
   }
   else if (core1ApplicationReportingEnabled)
   {
-    if (core1ApplicationReportMode == CORE1_REPORT_MODE_DEPTH)
+    if (core1ApplicationReportMode == CORE1_REPORT_MODE_STROBE)
+    {
+      // One row per exposure: every strobe fired, or left dark by the 'N' limit
+      if (strobeEvents != core1LastReportedStrobeEvents)
+      {
+        core1LastReportedStrobeEvents = strobeEvents;
+        core1PrintApplicationReport(core1ApplicationStreamTarget);
+        core1LastReportedLight = core1ApplicationReportState.activeLight;
+        core1LastApplicationReportMs = core1ReportTime;
+      }
+    }
+    else if (core1ApplicationReportMode == CORE1_REPORT_MODE_DEPTH)
     {
       if ((uint32_t)(core1ReportTime - core1LastApplicationReportMs) >= lightDurationMsec)
       {

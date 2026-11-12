@@ -37,7 +37,9 @@ enum Core1ToCore0CommandId : uint32_t
   CORE_COMMAND_DISABLE_LIGHTS    = 5, ///< Turn off all COB LED illumination ('0')
   CORE_COMMAND_ADVANCE_LIGHT     = 6, ///< Advance to next COB in sequence ('+')
   CORE_COMMAND_RESET_REQUEST     = 7, ///< Request hardware software reset sequence ('z')
-  CORE_COMMAND_START_TIMED_MODE  = 8  ///< Start timed flash mode (10s auto-stop) ('y')
+  CORE_COMMAND_START_TIMED_MODE  = 8, ///< Start timed flash mode (10s auto-stop) ('y')
+  CORE_COMMAND_EXPOSURE_LOCKED   = 9, ///< Step through the light schedule once per exposure ('e')
+  CORE_COMMAND_SET_SCHEDULE      = 10 ///< Apply core1PendingSchedule as the light schedule ('S<digits>')
 };
 
 /// @brief Source interface from which a command was originated.
@@ -198,6 +200,20 @@ extern std::atomic<uint32_t> exposureNormalFallCount;
 extern std::atomic<uint32_t> exposureShortPulseCount;
 extern std::atomic<uint32_t> exposureGuardrailTimeoutCount;
 extern std::atomic<uint32_t> exposureCycleCompleteCount;
+
+// =============================================================================
+//  Host-Adjustable Light Limits & Strobe Ground Truth (Rev 2.2)
+// =============================================================================
+//  Written by Core 1 when it parses 'E<us>' / 'N<n>', read by the Core 0 exposure ISRs.
+extern std::atomic<uint32_t> lightOnCeilingUs;              ///< Max COB on-time per exposure (us), clamped
+extern std::atomic<uint32_t> lightMaxConsecutiveActivations;///< Max exposures in a row for one COB (1..12)
+//  Written by the Core 0 exposure ISR, read by Core 1 for the CSV report.
+extern std::atomic<uint32_t> lightLastStrobeLight;          ///< COB that actually fired last (NO_LIGHT_ON = none yet)
+extern std::atomic<uint32_t> lightForcedAdvanceCount;       ///< Exposures where the 'N' limit swapped in another COB
+extern std::atomic<uint32_t> lightStarvedCount;             ///< Exposures left dark: 'N' limit hit, no other COB allowed
+//  'S<digits>' hand-off: Core 1 fills the buffer, then enqueues CORE_COMMAND_SET_SCHEDULE.
+extern uint8_t core1PendingSchedule[LIGHT_SCHEDULE_MAX_LENGTH];
+extern std::atomic<uint32_t> core1PendingScheduleLength;
 
 // =============================================================================
 //  Versioned Atomic Snapshots (Seqlock Pattern)

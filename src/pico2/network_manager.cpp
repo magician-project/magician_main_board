@@ -577,13 +577,125 @@ void core1ProcessDiagnosticStreaming()
   }
 }
 
+// -----------------------------------------------------------------------------
+// Multi-character command lines (Rev 2.2): 'E<us>', 'N<n>', 'S<digits>', each ended by '\n'.
+// One assembler per source so Serial and Ethernet bytes never interleave into one line.
+// -----------------------------------------------------------------------------
+struct CommandLineAssembler
+{
+  char buffer[COMMAND_LINE_MAX_LENGTH];
+  uint8_t length;
+  bool collecting; // Inside an 'E'/'N'/'S' line
+  bool discarding; // Dropping an unknown or overlong line up to its '\n'
+};
+static CommandLineAssembler core1LineAssembler[4];
+
+/// @brief Parses the decimal number following a command letter.
+/// @return True if at least one digit was present; value saturates at 99999.
+static bool parseCommandNumber(const char *text, uint32_t *value)
+{
+  uint32_t result = 0;
+  bool anyDigit = false;
+  while ((*text >= '0') && (*text <= '9'))
+  {
+    if (result < 99999u) result = (result * 10u) + (uint32_t)(*text - '0');
+    anyDigit = true;
+    text++;
+  }
+  *value = result;
+  return anyDigit;
+}
+
+/// @brief Executes one complete multi-character command line.
+static void core1ExecuteCommandLine(const char *line, uint32_t source)
+{
+  uint32_t value = 0;
+
+  switch (line[0])
+  {
+    case 'E': // Light-on ceiling per exposure, clamped to [LIGHT_ON_CEILING_MIN_US, LIGHT_TURNOFF_US]
+      if (!parseCommandNumber(line + 1, &value)) return;
+      if (value < LIGHT_ON_CEILING_MIN_US) value = LIGHT_ON_CEILING_MIN_US;
+      if (value > LIGHT_TURNOFF_US) value = LIGHT_TURNOFF_US;
+      lightOnCeilingUs.store(value, std::memory_order_relaxed);
+      return;
+
+    case 'N': // Max consecutive exposures for one COB; missing/0/too large -> the hard ceiling
+      if (!parseCommandNumber(line + 1, &value) || (value == 0) ||
+          (value > MAX_CONSECUTIVE_ACTIVATIONS_OF_LIGHT))
+      {
+        value = MAX_CONSECUTIVE_ACTIVATIONS_OF_LIGHT;
+      }
+      lightMaxConsecutiveActivations.store(value, std::memory_order_relaxed);
+      return;
+
+    case 'S': // Light schedule: one 0-indexed digit per entry ('0'..'5'); anything else is skipped
+    {
+      uint32_t count = 0;
+      for (const char *p = line + 1; (*p != 0) && (count < LIGHT_SCHEDULE_MAX_LENGTH); p++)
+      {
+        if ((*p >= '0') && (*p < (char)('0' + NUMBER_OF_LIGHTS)))
+        {
+          core1PendingSchedule[count++] = (uint8_t)(*p - '0');
+        }
+      }
+      if (count == 0) return;
+      core1PendingScheduleLength.store(count, std::memory_order_release);
+      uint32_t sequence = ++core1CommandSequence;
+      core1TryEnqueueCommand(CORE_COMMAND_SET_SCHEDULE, 0, source, sequence);
+      return;
+    }
+
+    default:
+      return;
+  }
+}
+
 /// @brief Classifies an incoming ASCII command byte and routes actions or enqueues commands.
-/// @param receivedByte ASCII character ('i', 'f', 'r', 't', 'a', 'y', 'h', '0', '+', '1'..'6', 'z', 'v', 'x').
+/// @param receivedByte ASCII character: single-byte commands i f r t a y h 0 + 1..6 z v x e, or part of an E/N/S line.
 /// @param source Originating transport interface (COMMAND_SOURCE_SERIAL or COMMAND_SOURCE_ETHERNET).
 void core1ClassifyCommandByte(uint8_t receivedByte, uint32_t source)
 {
-  if ((receivedByte == '\r') || (receivedByte == '\n')) return;
+  CommandLineAssembler &line = core1LineAssembler[source & 3u];
+  bool endOfLine = (receivedByte == '\n') || (receivedByte == '\r');
+
+  if (line.discarding)
+  {
+    if (endOfLine) line.discarding = false;
+    return;
+  }
+
+  if (line.collecting)
+  {
+    if (endOfLine)
+    {
+      line.buffer[line.length] = 0;
+      line.collecting = false;
+      if (core1ResetState == CORE1_RESET_IDLE) core1ExecuteCommandLine(line.buffer, source);
+      return;
+    }
+    if (line.length < (COMMAND_LINE_MAX_LENGTH - 1))
+    {
+      line.buffer[line.length++] = (char)receivedByte;
+    }
+    else
+    {
+      line.collecting = false; // Overlong: drop the whole line, never execute a fragment
+      line.discarding = true;
+    }
+    return;
+  }
+
+  if (endOfLine) return;
   if (core1ResetState != CORE1_RESET_IDLE) return;
+
+  if ((receivedByte == 'E') || (receivedByte == 'N') || (receivedByte == 'S'))
+  {
+    line.buffer[0] = (char)receivedByte;
+    line.length = 1;
+    line.collecting = true;
+    return;
+  }
 
   uint32_t command = CORE_COMMAND_NONE;
   uint32_t payload = 0;
@@ -684,7 +796,15 @@ void core1ClassifyCommandByte(uint8_t receivedByte, uint32_t source)
       payload = (uint32_t)(receivedByte - '1');
       break;
 
+    case 'e': // Exposure-locked: step the schedule once per exposure, one CSV row per strobe
+      core1ApplicationReportMode = CORE1_REPORT_MODE_STROBE;
+      command = CORE_COMMAND_EXPOSURE_LOCKED;
+      break;
+
     default:
+      // Unknown command letter: drop the rest of its line, so trailing digits of a
+      // command this firmware does not know are never executed as light selections.
+      if ((receivedByte > ' ') && (receivedByte < 0x7F)) line.discarding = true;
       return;
   }
 
