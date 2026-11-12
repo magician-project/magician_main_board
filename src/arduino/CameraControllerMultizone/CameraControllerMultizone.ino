@@ -231,6 +231,13 @@ uint8_t zoneFrameFresh[NUMBER_OF_DISTANCE_SENSORS] = {0};
 // When set, every reportState() line is followed by three "x1/x2/x3" zone lines.
 // Defaults ON: this firmware only runs on the multizone (VL53L5CX) hardware.
 bool emitAllZones = true;
+// Tracks whether the VL53L5CX sensors are actively ranging.  Set true once
+// setI2CDistanceAddresses() starts them.  The 'f' stop command halts ranging
+// (stopAllRanging) so the sensors idle between acquisition runs; the 'i'/'h'
+// start command resumes it (startAllRanging).  Because the Pico 2's native USB
+// does not reset the MCU when the host re-opens the port, this state persists
+// across runs — so 'i' must be able to restart ranging that a previous 'f' stopped.
+bool rangingActive = false;
 
 // =============================================================================
 //  MCP23018 state
@@ -553,6 +560,42 @@ void setI2CDistanceAddresses()
   mcp23018SetXSHUT(0, true);
   mcp23018SetXSHUT(1, true);
   mcp23018SetXSHUT(2, true);
+
+  rangingActive = true;  // all initialised sensors are now ranging
+}
+
+// Stop all working VL53L5CX sensors so they idle between acquisition runs.
+// Invoked by the 'f' stop command.  Safe to call when already stopped.
+void stopAllRanging()
+{
+#if USE_LASER
+  if (!rangingActive) return;
+  for (uint8_t i = 0; i < NUMBER_OF_DISTANCE_SENSORS; i++)
+  {
+    if (!laser_working[i]) continue;
+    tof[i].stopRanging();
+    laser_status[i]    = 0;
+    zoneFrameFresh[i]  = 0;  // drop any pending frame so it is not sent on resume
+  }
+  rangingActive = false;
+#endif
+}
+
+// Resume ranging on all working sensors after a previous stopAllRanging().
+// Invoked by the 'i'/'h' start command.  Safe to call when already ranging.
+// The VL53L5CX retains its resolution/frequency configuration across a
+// stop/start cycle, so only startRanging() is needed here.
+void startAllRanging()
+{
+#if USE_LASER
+  if (rangingActive) return;
+  for (uint8_t i = 0; i < NUMBER_OF_DISTANCE_SENSORS; i++)
+  {
+    if (!laser_working[i]) continue;
+    tof[i].startRanging();
+  }
+  rangingActive = true;
+#endif
 }
 
 // =============================================================================
@@ -579,6 +622,7 @@ static uint16_t centerDistanceMm(const VL53L5CX_ResultsData &r)
 // Called once per main-loop tick at the configured loopRateMsec cadence.
 void read_triple_sensors()
 {
+  if (!rangingActive) return;  // sensors stopped via 'f' — nothing to poll
   for (uint8_t i = 0; i < NUMBER_OF_DISTANCE_SENSORS; i++)
   {
     if (!laser_working[i]) continue;
@@ -1131,7 +1175,7 @@ void loop()
   //   +        — advance one light step (manual stepping)
   //   o        — reset maximum light-on time to default (1000 µs)
   //   p        — extend maximum light-on time by 500 µs
-  //   f        — disable serial output stream
+  //   f        — disable serial output stream AND stop ToF ranging (resumed by 'i'/'h')
   //   z        — all off + software reset
   //   x        — print Ethernet IP and hardware status
   if (receivedChar != 0)
@@ -1142,6 +1186,7 @@ void loop()
 
       case 'h':
       case 'i':
+        startAllRanging();         // resume ToF ranging if a previous 'f' stopped it
         reset_millis();
         serialOutputEnabled = true;
         currentTime         = 0;
@@ -1170,7 +1215,7 @@ void loop()
       case 'm': emitAllZones = true;  break;  // stream full 8×8 zone frames (x1/x2/x3 lines)
       case 'c': emitAllZones = false; break;  // compact only — suppress zone frames
 
-      case 'f': serialOutputEnabled = false;           break;
+      case 'f': serialOutputEnabled = false; stopAllRanging(); break;  // stop output AND idle the ToF sensors
       case 'z': deactivateLights(); autoLights = 0; resetFunc(); break;
 
       case '+':
