@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-//  MagicianCam4 — Rev. 2.1
+//  MagicianCam4 — Rev. 2.2
 //  Application Layer: Spatial ToF Analysis, Dynamic Lighting & CSV Reporting Header
 // =============================================================================
 //  Subsystem Architecture:

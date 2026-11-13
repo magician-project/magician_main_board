@@ -1,5 +1,5 @@
 // =============================================================================
-//  MagicianCam4 — Rev. 2.1
+//  MagicianCam4 — Rev. 2.2
 //  Network Manager Implementation: Ethernet SPI0, Serial CDC, Parsing & Sliced Diagnostics
 // =============================================================================
 

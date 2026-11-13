@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-//  MagicianCam4 — Rev. 2.1
+//  MagicianCam4 — Rev. 2.2
 //  Inter-Core Communication: Lock-Free SPSC Queues, Shared Buffers & Atomics
 // =============================================================================
 //  This module defines the lock-free inter-core communication channels between

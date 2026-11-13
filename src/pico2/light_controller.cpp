@@ -1,5 +1,5 @@
 // =============================================================================
-//  MagicianCam4 — Rev. 2.1
+//  MagicianCam4 — Rev. 2.2
 //  COB LED Lighting Controller Implementation: Single-Cycle SIO & Hardware Timer Guardrails
 // =============================================================================
 

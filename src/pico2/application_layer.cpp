@@ -1,5 +1,5 @@
 // =============================================================================
-//  MagicianCam4 — Rev. 2.1
+//  MagicianCam4 — Rev. 2.2
 //  Application Layer Implementation: 4-Zone Matrix Average & Vector Light Recommendation
 // =============================================================================
 

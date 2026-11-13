@@ -1,5 +1,5 @@
 // =============================================================================
-//  MagicianCam4 — Rev. 2.1
+//  MagicianCam4 — Rev. 2.2
 //  VL53L5CX Driver Implementation: Boot-State Aware Addressing & Interrupt Acquisition
 // =============================================================================
 

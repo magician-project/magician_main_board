@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-//  MagicianCam4 — Rev. 2.1
+//  MagicianCam4 — Rev. 2.2
 //  MCP23018 I2C I/O Expander & Push-Button Subsystem Header
 // =============================================================================
 //  Hardware Architecture:

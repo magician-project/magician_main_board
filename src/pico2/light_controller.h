@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-//  MagicianCam4 — Rev. 2.1
+//  MagicianCam4 — Rev. 2.2
 //  COB LED Lighting Controller & Hardware-Timed Camera Exposure Subsystem Header
 // =============================================================================
 //  Subsystem Architecture:
@@ -11,7 +11,7 @@
 //    - SIO Direct Drive : Single-cycle direct register writes (`sio_hw->gpio_set/clr`)
 //    - Safety Guardrails: 3-stage RP2350 hardware timer alarm referenced to t0:
 //        * Stage 1: 20 us noise guard window before arming FALL interrupt.
-//        * Stage 2: 1000 us maximum ON-time timeout guardrail.
+//        * Stage 2: maximum ON-time timeout guardrail ('E<us>', 50..1000 us, default 1000 us).
 //        * Stage 3: 40000 us minimum cycle period (<= 25 Hz maximum rate).
 //    - Real-Time Metrics: Zero-jitter atomic counters for exposure diagnostics.
 // =============================================================================

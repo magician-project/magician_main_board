@@ -1,7 +1,7 @@
 #pragma once
 
 // =============================================================================
-//  MagicianCam4 — Rev. 2.1
+//  MagicianCam4 — Rev. 2.2
 //  Hardware Configuration, Pinout Mapping & Compile-Time Constants
 // =============================================================================
 //  Target Platform : Raspberry Pi Pico 2 (RP2350 - ARM Cortex-M33 @ 150 MHz)

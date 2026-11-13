@@ -1,7 +1,15 @@
 // =============================================================================
 //  CameraControllerMultizone — Raspberry Pi Pico 2 (RP2350)
 //  HW version: MagicianCam4 — Rev. 1.3
-//  SW version: 2.1 (Modular Architecture)
+//  SW version: 2.2 (Modular Architecture)
+//
+//  Changes in 2.2 (relative to 2.1):
+//    - Line commands 'E<us>' (light-on ceiling), 'N<n>' (max consecutive exposures per COB,
+//      0 = unlimited, the default), 'S<digits>' (light schedule); unknown lines are discarded
+//    - 'e': exposure-locked mode, one schedule step and one CSV row per exposure
+//    - CSV extended to 17 fields (StrobeCounter, StrobeLight, ForcedAdvances, Starved, WatchdogTrips)
+//    - 'x' report: light limits & schedule section
+//    - No new interrupt-off sections; all new ISR work runs inside the 20 us guard window
 //
 //  Dual-Core Architecture:
 //    - Core 0: Real-Time & Hardware Subsystems (Exposure ISR, COB LEDs, I2C, ToF)
