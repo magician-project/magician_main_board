@@ -34,6 +34,7 @@ bool core1TryEnqueueCommand(uint32_t command, uint32_t payload, uint32_t source,
 void core1ClassifyCommandByte(uint8_t receivedByte, uint32_t source);
 void core1TriggerDiagnosticSnapshot(Core1OutputTarget target);
 void core1ProcessDiagnosticStreaming();
+void core1ProcessRailQueryReply();
 void core1BroadcastResetText(const __FlashStringHelper *text);
 void core1SendDirectText(Core1OutputTarget target, const char *text, uint16_t length);
 Core1OutputTarget core1OutputTargetFromSource(uint32_t source);

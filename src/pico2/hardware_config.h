@@ -285,6 +285,15 @@ void core0QueueOutputValue(int value);
 //               3V3 regulator the MCP23018, ToF sensors and WIZ850io), panel I/O J13
 // Switching +5VCC off without USB therefore cuts the board's own supply: refused unless VBUS is present.
 #define USB_VBUS_SENSE_PIN                24    // Pico 2 GP24: high while USB VBUS is present
+#define VSYS_SENSE_PIN                    29    // GP29 / ADC3: VSYS / 3 on an OFFICIAL Pico 2 only. The fitted module is
+                                                // a clone where this is unverified (reads ~0.97 V on USB), so the firmware
+                                                // reports raw pin millivolts ("ADC3=") and never converts them to VSYS.
+#define RAIL_READBACK_PERIOD_MS           1000  // Core 0 re-reads the rail enable pins and VSYS this often
+#define RAIL_QUERY_TIMEOUT_MS             250   // 'p' answers "P:ERR" if Core 0 has not refreshed by then
+// Neither rail voltage reaches an ADC: the TPS54302 (6-pin) has no power-good output and
+// +5VCC / +11.5VCC only go to their LEDs and connectors. The readback therefore confirms the
+// MCP23018 enable pins, not the rails themselves. Suggested for the next board revision: a
+// divider from +11.5VCC to the spare GP28/ADC2 (today routed only to panel I/O J13 pin 6).
 #define RAIL_CYCLE_DEFAULT_OFF_MS         500   // 'PR' with no number: the camera rail stays off this long
 #define RAIL_CYCLE_MIN_OFF_MS             50    // 'PR<ms>' clamp
 #define RAIL_CYCLE_MAX_OFF_MS             10000

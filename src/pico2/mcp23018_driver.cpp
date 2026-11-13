@@ -80,6 +80,19 @@ uint8_t mcp23018ReadReg(uint8_t reg)
   return 0xFF;
 }
 
+/// @brief Reads one MCP23018 register and reports whether the I2C transfer succeeded.
+/// @note Unlike mcp23018ReadReg(), a failed read is distinguishable from a register holding 0xFF.
+bool mcp23018ReadRegChecked(uint8_t reg, uint8_t *value)
+{
+  Wire.beginTransmission(MCP23018_ADDR);
+  Wire.write(reg);
+  if (Wire.endTransmission() != 0) return false;
+  if (Wire.requestFrom((uint8_t)MCP23018_ADDR, (uint8_t)1) != 1) return false;
+  if (!Wire.available()) return false;
+  *value = (uint8_t)Wire.read();
+  return true;
+}
+
 /// @brief Sets or clears a single output bit on Port A using the shadow latch register.
 /// @param bit Bit position (0..7).
 /// @param state True to set bit HIGH (open-drain floating), false to pull LOW (active GND clamp).

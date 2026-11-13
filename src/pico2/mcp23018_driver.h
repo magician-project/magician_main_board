@@ -31,6 +31,7 @@ extern int pbDebounceState;
 void recoverI2CBus();
 bool mcp23018WriteReg(uint8_t reg, uint8_t val);
 uint8_t mcp23018ReadReg(uint8_t reg);
+bool mcp23018ReadRegChecked(uint8_t reg, uint8_t *value);
 
 void mcp23018SetPortABit(uint8_t bit, bool state);
 void mcp23018EnablePortAPullup(uint8_t bit, bool state);

@@ -58,6 +58,9 @@ std::atomic<uint32_t> core1PendingScheduleVersion{0};
 std::atomic<uint32_t> core0RailState{RAIL_STATE_5V_ON | RAIL_STATE_11V_ON};
 std::atomic<uint32_t> core0RailCommandConsumeCount{0};
 std::atomic<uint32_t> core0RailRefusedCount{0};
+std::atomic<uint32_t> core0RailReadback{0};
+std::atomic<uint32_t> core0RailReadbackMs{0};
+std::atomic<uint32_t> core0RailReadbackSeq{0};
 std::atomic<uint32_t> core1RailCycleOffMs{RAIL_CYCLE_DEFAULT_OFF_MS};
 
 // -----------------------------------------------------------------------------

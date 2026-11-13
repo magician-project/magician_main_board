@@ -11,6 +11,8 @@
 //    - 'P11,0|1' switches the 11.5 V camera rail, 'PR<ms>' power-cycles it; 'P5,0|1' switches the
 //      5 V rail, but off is refused without USB (it is then the board's own supply). Lights are
 //      turned off first. Previously the rails could not be controlled at all.
+//    - 'p': one-line power query "P:11V=c/r,5V=c/r,VBUS=..,ADC3=..mV,CYCLE=..,MCP=..,REFUSED=.."
+//      (c = commanded, r = MCP23018 enable-pin readback; there is no rail voltage sense)
 //    - 'x' report: light limits & schedule, power rails sections
 //    - No new interrupt-off sections; all new ISR work runs inside the 20 us guard window
 //
@@ -149,6 +151,22 @@ static bool core0SetRail(bool rail11V, bool on)
   return true;
 }
 
+/// @brief Re-reads the rail enable pins (MCP23018 GPIOA) and the GP29/ADC3 pin voltage, and publishes them.
+/// @note Core 0 owns the I2C bus; this is one register read (~50 us at 1 MHz) plus one ADC sample.
+static uint32_t railReadbackLastMs = 0;
+static void core0RefreshRailReadback()
+{
+  uint8_t gpioa = 0;
+  bool readOk = mcp23018_present && mcp23018ReadRegChecked(MCP23018_GPIOA, &gpioa);
+  uint32_t raw = (uint32_t)analogRead(VSYS_SENSE_PIN);            // 12-bit, 3.3 V reference
+  uint32_t pinMv = (raw * 3300u) / 4095u;                         // raw pin voltage; see VSYS_SENSE_PIN
+  core0RailReadback.store((uint32_t)gpioa | (readOk ? RAIL_READBACK_OK_BIT : 0u) |
+                          (pinMv << RAIL_READBACK_VSYS_SHIFT), std::memory_order_relaxed);
+  railReadbackLastMs = millis();
+  core0RailReadbackMs.store(railReadbackLastMs, std::memory_order_relaxed);
+  core0RailReadbackSeq.fetch_add(1, std::memory_order_release);
+}
+
 /// @brief Completes a pending 'PR' camera power-cycle once its off time has elapsed (non-blocking).
 static void core0ProcessRailCycle()
 {
@@ -157,6 +175,7 @@ static void core0ProcessRailCycle()
   core0SetRail(true, true);
   railCyclePending = false;
   core0PublishRailState();
+  core0RefreshRailReadback();
 }
 
 static void core0TryDequeueCommand()
@@ -257,6 +276,7 @@ static void core0TryDequeueCommand()
       railCyclePending = false; // an explicit switch overrides a power-cycle in progress
       core0SetRail((payload & 1u) != 0, (payload & 2u) != 0);
       core0PublishRailState();
+      core0RefreshRailReadback();
       core0RailCommandConsumeCount.fetch_add(1, std::memory_order_relaxed);
       break;
 
@@ -265,7 +285,12 @@ static void core0TryDequeueCommand()
       railCyclePending = true;
       railCycleOnAtMs = millis() + core1RailCycleOffMs.load(std::memory_order_acquire);
       core0PublishRailState();
+      core0RefreshRailReadback();
       core0RailCommandConsumeCount.fetch_add(1, std::memory_order_relaxed);
+      break;
+
+    case CORE_COMMAND_QUERY_RAILS:
+      core0RefreshRailReadback();
       break;
 
     case CORE_COMMAND_RESET_REQUEST:
@@ -407,7 +432,9 @@ void setup()
   core0RuntimeStatusSnapshot.activeLight.store(NO_LIGHT_ON, std::memory_order_relaxed);
 
   pinMode(USB_VBUS_SENSE_PIN, INPUT);
+  analogReadResolution(12);
   core0PublishRailState();
+  core0RefreshRailReadback();
   core0SystemReady.store(1, std::memory_order_release);
 
   while (core1TransportReady.load(std::memory_order_acquire) == 0)
@@ -445,6 +472,7 @@ void loop()
 
   core0TryDequeueCommand();
   core0ProcessRailCycle();
+  if ((uint32_t)(millis() - railReadbackLastMs) >= RAIL_READBACK_PERIOD_MS) core0RefreshRailReadback();
 
   if (softwareResetRequested)
   {
@@ -616,6 +644,7 @@ void loop1()
 
   core1DrainCore0OutputQueue();
   core1ProcessDiagnosticStreaming();
+  core1ProcessRailQueryReply();
   core1ConsumeRuntimeStatusSnapshot();
 
 #if USE_W5500

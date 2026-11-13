@@ -29,6 +29,12 @@ uintptr_t core1StackPointerAtDiagnosticPoint = 0;
 uint32_t core1CommandSequence = 0; // Monotonic sequence counter for Core 1 commands
 static uint32_t core1DiscardedCommandLineCount = 0; // Unknown or overlong command lines dropped (Core 1 only)
 
+// 'p' power query: Core 1 asks Core 0 for a fresh readback, then replies once it is published
+static bool core1RailQueryPending = false;
+static Core1OutputTarget core1RailQueryTarget = CORE1_OUTPUT_NONE;
+static uint32_t core1RailQueryBaselineSeq = 0;
+static uint32_t core1RailQueryStartMs = 0;
+
 // =============================================================================
 //  Binary Snapshot Structure (~300 bytes) & Sliced Formatter State
 // =============================================================================
@@ -130,6 +136,8 @@ struct DiagnosticSnapshot
   uint32_t railCycleOffMs;
   uint32_t railRefusedCount;
   uint32_t usbVbusPresent;
+  uint32_t railReadback;
+  uint32_t railReadbackAgeMs;
 
   // ToF Shared Buffers & Rates
   uint32_t tofSecondarySlotUses;
@@ -429,6 +437,8 @@ void core1TriggerDiagnosticSnapshot(Core1OutputTarget target)
   diagSnap.railCycleOffMs = core1RailCycleOffMs.load(std::memory_order_relaxed);
   diagSnap.railRefusedCount = core0RailRefusedCount.load(std::memory_order_relaxed);
   diagSnap.usbVbusPresent = gpio_get(USB_VBUS_SENSE_PIN) ? 1u : 0u; // SIO read, no I2C
+  diagSnap.railReadback = core0RailReadback.load(std::memory_order_acquire);
+  diagSnap.railReadbackAgeMs = millis() - core0RailReadbackMs.load(std::memory_order_relaxed);
 
   diagSnap.tofSecondarySlotUses = tofSecondarySlotUseCount.load(std::memory_order_relaxed);
   diagSnap.tofMaxOccupiedSlots = tofMaxOccupiedSlots.load(std::memory_order_relaxed);
@@ -460,6 +470,44 @@ void core1TriggerDiagnosticSnapshot(Core1OutputTarget target)
   diagnosticStreamingTarget = target;
   diagnosticLineIndex = 0;
   diagnosticStreamingActive = true;
+}
+
+/// @brief Sends the 'p' reply once Core 0 has published a readback newer than the request.
+/// Format: P:11V=c/r,5V=c/r,VBUS=0|1,ADC3=<mV>mV,CYCLE=0|1,MCP=0|1,REFUSED=n
+///   ADC3 = raw GP29 pin millivolts (VSYS/3 only on an official Pico 2; unverified on the fitted clone)
+///   c = commanded state, r = MCP23018 enable-pin readback (1 on, 0 off, ? unreadable)
+void core1ProcessRailQueryReply()
+{
+  if (!core1RailQueryPending) return;
+
+  char buf[112];
+  int len;
+  if (core0RailReadbackSeq.load(std::memory_order_acquire) == core1RailQueryBaselineSeq)
+  {
+    if ((uint32_t)(millis() - core1RailQueryStartMs) < RAIL_QUERY_TIMEOUT_MS) return;
+    len = snprintf(buf, sizeof(buf), "P:ERR=timeout\r\n");
+  }
+  else
+  {
+    uint32_t state = core0RailState.load(std::memory_order_acquire);
+    uint32_t readback = core0RailReadback.load(std::memory_order_relaxed);
+    bool readOk = (readback & RAIL_READBACK_OK_BIT) != 0;
+    uint32_t gpioa = readback & RAIL_READBACK_GPIOA_FIELD;
+    uint32_t adc3Mv = readback >> RAIL_READBACK_VSYS_SHIFT;
+    // Enable pins are active-low: pin LOW = rail on
+    char r11 = readOk ? ((gpioa & (1u << MCP_GPA_RAIL11V)) ? '0' : '1') : '?';
+    char r5  = readOk ? ((gpioa & (1u << MCP_GPA_RAIL5V))  ? '0' : '1') : '?';
+    len = snprintf(buf, sizeof(buf), "P:11V=%c/%c,5V=%c/%c,VBUS=%u,ADC3=%lumV,CYCLE=%u,MCP=%u,REFUSED=%lu\r\n",
+                   (state & RAIL_STATE_11V_ON) ? '1' : '0', r11,
+                   (state & RAIL_STATE_5V_ON) ? '1' : '0', r5,
+                   gpio_get(USB_VBUS_SENSE_PIN) ? 1u : 0u,
+                   (unsigned long)adc3Mv,
+                   (state & RAIL_STATE_CYCLING) ? 1u : 0u,
+                   (state & RAIL_STATE_MCP_PRESENT) ? 1u : 0u,
+                   (unsigned long)core0RailRefusedCount.load(std::memory_order_relaxed));
+  }
+  core1RailQueryPending = false;
+  if (len > 0) core1SendDirectText(core1RailQueryTarget, buf, (uint16_t)len);
 }
 
 /// @brief Sliced non-blocking formatter: emits exactly 1 line per loop1 tick (< 15 us).
@@ -645,7 +693,24 @@ void core1ProcessDiagnosticStreaming()
     case 100: len = snprintf(buf, sizeof(buf), "Camera power-cycle (PR): %s, off time %lu ms; rail commands %lu, refused %lu\r\n",
                              (diagSnap.railState & RAIL_STATE_CYCLING) ? "IN PROGRESS" : "idle", (unsigned long)diagSnap.railCycleOffMs,
                              (unsigned long)diagSnap.railCommandConsumeCount, (unsigned long)diagSnap.railRefusedCount); break;
-    case 101: len = snprintf(buf, sizeof(buf), "=== END OF DIAGNOSTIC REPORT ===\r\n\r\n"); break;
+    case 101:
+    {
+      bool ok = (diagSnap.railReadback & RAIL_READBACK_OK_BIT) != 0;
+      uint32_t gpioa = diagSnap.railReadback & RAIL_READBACK_GPIOA_FIELD;
+      len = snprintf(buf, sizeof(buf), "Enable-pin readback: 11.5V %s, 5V %s (GPIOA 0x%02lX%s), %lu ms ago\r\n",
+                     !ok ? "?" : ((gpioa & (1u << MCP_GPA_RAIL11V)) ? "off" : "on"),
+                     !ok ? "?" : ((gpioa & (1u << MCP_GPA_RAIL5V)) ? "off" : "on"),
+                     (unsigned long)gpioa, ok ? "" : ", READ FAILED", (unsigned long)diagSnap.railReadbackAgeMs);
+      break;
+    }
+    case 102:
+    {
+      uint32_t mv = diagSnap.railReadback >> RAIL_READBACK_VSYS_SHIFT;
+      len = snprintf(buf, sizeof(buf), "GP29/ADC3 pin: %lu mV raw (VSYS/3 only on an official Pico 2; no rail voltage sense)\r\n",
+                     (unsigned long)mv);
+      break;
+    }
+    case 103: len = snprintf(buf, sizeof(buf), "=== END OF DIAGNOSTIC REPORT ===\r\n\r\n"); break;
 
     default:
       diagnosticStreamingActive = false;
@@ -658,7 +723,7 @@ void core1ProcessDiagnosticStreaming()
   }
 
   diagnosticLineIndex++;
-  if (diagnosticLineIndex > 101)
+  if (diagnosticLineIndex > 103)
   {
     diagnosticStreamingActive = false;
   }
@@ -771,7 +836,7 @@ static void core1ExecuteCommandLine(const char *line, uint32_t source)
 }
 
 /// @brief Classifies an incoming ASCII command byte and routes actions or enqueues commands.
-/// @param receivedByte ASCII character: single-byte commands i f r t a y h 0 + 1..6 z v x e, or part of an E/N/S/P line.
+/// @param receivedByte ASCII character: single-byte commands i f r t a y h 0 + 1..6 z v x e p, or part of an E/N/S/P line.
 /// @param source Originating transport interface (COMMAND_SOURCE_SERIAL or COMMAND_SOURCE_ETHERNET).
 void core1ClassifyCommandByte(uint8_t receivedByte, uint32_t source)
 {
@@ -915,6 +980,18 @@ void core1ClassifyCommandByte(uint8_t receivedByte, uint32_t source)
       command = CORE_COMMAND_SELECT_LIGHT;
       payload = (uint32_t)(receivedByte - '1');
       break;
+
+    case 'p': // Power query: one-line reply once Core 0 has re-read the enable pins and VSYS
+    {
+      Core1OutputTarget target = core1OutputTargetFromSource(source);
+      if (target == CORE1_OUTPUT_NONE) return;
+      core1RailQueryTarget = target;
+      core1RailQueryBaselineSeq = core0RailReadbackSeq.load(std::memory_order_acquire);
+      core1RailQueryStartMs = millis();
+      core1RailQueryPending = true;
+      command = CORE_COMMAND_QUERY_RAILS;
+      break;
+    }
 
     case 'e': // Exposure-locked: step the schedule once per exposure, one CSV row per strobe
       core1ApplicationReportMode = CORE1_REPORT_MODE_STROBE;

@@ -41,7 +41,8 @@ enum Core1ToCore0CommandId : uint32_t
   CORE_COMMAND_EXPOSURE_LOCKED   = 9, ///< Step through the light schedule once per exposure ('e')
   CORE_COMMAND_SET_SCHEDULE      = 10, ///< Apply core1PendingSchedule as the light schedule ('S<digits>')
   CORE_COMMAND_SET_RAIL          = 11, ///< Switch one rail: payload bit0 = rail (0=5V, 1=11.5V), bit1 = on ('P5,x' / 'P11,x')
-  CORE_COMMAND_CYCLE_RAILS       = 12  ///< Power-cycle the 11.5 V camera rail for core1RailCycleOffMs ('PR<ms>')
+  CORE_COMMAND_CYCLE_RAILS       = 12, ///< Power-cycle the 11.5 V camera rail for core1RailCycleOffMs ('PR<ms>')
+  CORE_COMMAND_QUERY_RAILS       = 13  ///< Re-read the rail enable pins and VSYS now ('p')
 };
 
 /// @brief Source interface from which a command was originated.
@@ -231,6 +232,14 @@ extern std::atomic<uint32_t> core0RailState;           ///< RAIL_STATE_* bits
 extern std::atomic<uint32_t> core0RailCommandConsumeCount;
 extern std::atomic<uint32_t> core0RailRefusedCount;    ///< 'P5,0' refused: no USB VBUS, the 5 V rail is the board's own supply
 extern std::atomic<uint32_t> core1RailCycleOffMs;      ///< Off time for the next CORE_COMMAND_CYCLE_RAILS
+//  Rail readback published by Core 0: bits 0..7 MCP23018 GPIOA pin levels, bit 8 = read OK,
+//  bits 16..31 GP29/ADC3 pin voltage in mV (raw, not scaled to VSYS). core0RailReadbackSeq increments (release) after every refresh.
+#define RAIL_READBACK_GPIOA_FIELD 0x000000FFu
+#define RAIL_READBACK_OK_BIT      0x00000100u
+#define RAIL_READBACK_VSYS_SHIFT  16u
+extern std::atomic<uint32_t> core0RailReadback;
+extern std::atomic<uint32_t> core0RailReadbackMs;      ///< millis() of the last refresh
+extern std::atomic<uint32_t> core0RailReadbackSeq;
 
 // =============================================================================
 //  Versioned Atomic Snapshots (Seqlock Pattern)
