@@ -8,7 +8,10 @@
 //      0 = unlimited, the default), 'S<digits>' (light schedule); unknown lines are discarded
 //    - 'e': exposure-locked mode, one schedule step and one CSV row per exposure
 //    - CSV extended to 17 fields (StrobeCounter, StrobeLight, ForcedAdvances, Starved, WatchdogTrips)
-//    - 'x' report: light limits & schedule section
+//    - 'P11,0|1' switches the 11.5 V camera rail, 'PR<ms>' power-cycles it; 'P5,0|1' switches the
+//      5 V rail, but off is refused without USB (it is then the board's own supply). Lights are
+//      turned off first. Previously the rails could not be controlled at all.
+//    - 'x' report: light limits & schedule, power rails sections
 //    - No new interrupt-off sections; all new ISR work runs inside the 20 us guard window
 //
 //  Dual-Core Architecture:
@@ -108,6 +111,54 @@ static void core0TryConsumeRecommendationSnapshot()
 }
 
 /// @brief Dequeues and executes host commands dispatched by Core 1.
+// =============================================================================
+//  Power rails ('P5,x', 'P11,x', 'PR<ms>'): Core 0 owns the I2C bus to the MCP23018
+// =============================================================================
+static bool rail5VOn = true;          // Both rails are on from power-up (MCP23018 OLATA default 0x3C)
+static bool rail11VOn = true;
+static bool railCyclePending = false; // 'PR' in progress: rails off until railCycleOnAtMs
+static uint32_t railCycleOnAtMs = 0;
+
+/// @brief Publishes the rail state word read by the 'x' report.
+static void core0PublishRailState()
+{
+  uint32_t state = (rail5VOn ? RAIL_STATE_5V_ON : 0u) | (rail11VOn ? RAIL_STATE_11V_ON : 0u) |
+                   (railCyclePending ? RAIL_STATE_CYCLING : 0u) | (mcp23018_present ? RAIL_STATE_MCP_PRESENT : 0u);
+  core0RailState.store(state, std::memory_order_release);
+}
+
+/// @brief Switches one rail. Lights are turned off and disarmed before any rail goes down.
+/// @note The 5 V rail is the Pico's own supply (VSYS via Q19) whenever USB is absent, so turning
+///       it off is refused in that case: it would brown out the board mid-command, and the rail
+///       would come back by itself as the MCP23018 lost power, i.e. an uncontrolled reset.
+/// @return False if the request was refused.
+static bool core0SetRail(bool rail11V, bool on)
+{
+  if (!rail11V && !on && !gpio_get(USB_VBUS_SENSE_PIN))
+  {
+    core0RailRefusedCount.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+  if (!on)
+  {
+    autoLights = STEP_EXTERNAL;
+    deactivateLights();
+  }
+  if (rail11V) { mcp23018EnableRail11V(on); rail11VOn = on; }
+  else         { mcp23018EnableRail5V(on);  rail5VOn  = on; }
+  return true;
+}
+
+/// @brief Completes a pending 'PR' camera power-cycle once its off time has elapsed (non-blocking).
+static void core0ProcessRailCycle()
+{
+  if (!railCyclePending) return;
+  if ((int32_t)(millis() - railCycleOnAtMs) < 0) return;
+  core0SetRail(true, true);
+  railCyclePending = false;
+  core0PublishRailState();
+}
+
 static void core0TryDequeueCommand()
 {
   uint32_t tail = core1ToCore0CommandQueue.tail.load(std::memory_order_relaxed);
@@ -201,6 +252,21 @@ static void core0TryDequeueCommand()
       }
       break;
     }
+
+    case CORE_COMMAND_SET_RAIL:
+      railCyclePending = false; // an explicit switch overrides a power-cycle in progress
+      core0SetRail((payload & 1u) != 0, (payload & 2u) != 0);
+      core0PublishRailState();
+      core0RailCommandConsumeCount.fetch_add(1, std::memory_order_relaxed);
+      break;
+
+    case CORE_COMMAND_CYCLE_RAILS: // camera rail only; the 5 V rail may be the board's own supply
+      core0SetRail(true, false);
+      railCyclePending = true;
+      railCycleOnAtMs = millis() + core1RailCycleOffMs.load(std::memory_order_acquire);
+      core0PublishRailState();
+      core0RailCommandConsumeCount.fetch_add(1, std::memory_order_relaxed);
+      break;
 
     case CORE_COMMAND_RESET_REQUEST:
       autoLights = STEP_EXTERNAL;
@@ -340,6 +406,8 @@ void setup()
   core0RuntimeStatusSnapshot.button2.store(0, std::memory_order_relaxed);
   core0RuntimeStatusSnapshot.activeLight.store(NO_LIGHT_ON, std::memory_order_relaxed);
 
+  pinMode(USB_VBUS_SENSE_PIN, INPUT);
+  core0PublishRailState();
   core0SystemReady.store(1, std::memory_order_release);
 
   while (core1TransportReady.load(std::memory_order_acquire) == 0)
@@ -376,6 +444,7 @@ void loop()
 #endif
 
   core0TryDequeueCommand();
+  core0ProcessRailCycle();
 
   if (softwareResetRequested)
   {

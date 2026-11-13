@@ -278,7 +278,16 @@ void core0QueueOutputValue(int value);
 #define LIGHT_ON_CEILING_MIN_US           50    // 'E<us>' lower clamp (must stay > LIGHT_FALL_ARM_DELAY_US)
                                                 // 'E<us>' upper clamp is LIGHT_TURNOFF_US
 #define LIGHT_SCHEDULE_MAX_LENGTH         60    // 'S<digits>' maximum number of schedule entries
-#define COMMAND_LINE_MAX_LENGTH           72    // Longest multi-character command line ('E','N','S')
+#define COMMAND_LINE_MAX_LENGTH           72    // Longest multi-character command line ('E','N','S','P')
+// Power rails (Cam5 / v4 schematics):
+//   +11.5VCC -> J16 "Cam. Pwr" jumper -> CAM_PWR -> camera connector J8 pin 4 (Sony XCG-CP510), panel I/O J13
+//   +5VCC    -> Q19 P-FET -> Pico 2 VSYS whenever USB VBUS is absent (powers the Pico, and through its
+//               3V3 regulator the MCP23018, ToF sensors and WIZ850io), panel I/O J13
+// Switching +5VCC off without USB therefore cuts the board's own supply: refused unless VBUS is present.
+#define USB_VBUS_SENSE_PIN                24    // Pico 2 GP24: high while USB VBUS is present
+#define RAIL_CYCLE_DEFAULT_OFF_MS         500   // 'PR' with no number: the camera rail stays off this long
+#define RAIL_CYCLE_MIN_OFF_MS             50    // 'PR<ms>' clamp
+#define RAIL_CYCLE_MAX_OFF_MS             10000
 
 // =============================================================================
 //  W5500 Ethernet SPI Architecture & Network Configuration

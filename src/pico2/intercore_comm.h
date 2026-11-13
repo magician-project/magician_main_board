@@ -39,7 +39,9 @@ enum Core1ToCore0CommandId : uint32_t
   CORE_COMMAND_RESET_REQUEST     = 7, ///< Request hardware software reset sequence ('z')
   CORE_COMMAND_START_TIMED_MODE  = 8, ///< Start timed flash mode (10s auto-stop) ('y')
   CORE_COMMAND_EXPOSURE_LOCKED   = 9, ///< Step through the light schedule once per exposure ('e')
-  CORE_COMMAND_SET_SCHEDULE      = 10 ///< Apply core1PendingSchedule as the light schedule ('S<digits>')
+  CORE_COMMAND_SET_SCHEDULE      = 10, ///< Apply core1PendingSchedule as the light schedule ('S<digits>')
+  CORE_COMMAND_SET_RAIL          = 11, ///< Switch one rail: payload bit0 = rail (0=5V, 1=11.5V), bit1 = on ('P5,x' / 'P11,x')
+  CORE_COMMAND_CYCLE_RAILS       = 12  ///< Power-cycle the 11.5 V camera rail for core1RailCycleOffMs ('PR<ms>')
 };
 
 /// @brief Source interface from which a command was originated.
@@ -219,6 +221,16 @@ extern std::atomic<uint32_t> lightStarvedCount;             ///< Exposures left 
 extern uint8_t core1PendingSchedule[LIGHT_SCHEDULE_MAX_LENGTH];
 extern std::atomic<uint32_t> core1PendingScheduleLength;
 extern std::atomic<uint32_t> core1PendingScheduleVersion;
+
+//  Power rails (Rev 2.2). Core 0 owns the I2C bus, so it does all switching and publishes the state.
+#define RAIL_STATE_5V_ON        0x1u ///< 5 V rail commanded on
+#define RAIL_STATE_11V_ON       0x2u ///< 11.5 V rail commanded on
+#define RAIL_STATE_CYCLING      0x4u ///< 'PR' power-cycle in progress (camera rail off, turning back on)
+#define RAIL_STATE_MCP_PRESENT  0x8u ///< MCP23018 answered at boot (otherwise rail commands do nothing)
+extern std::atomic<uint32_t> core0RailState;           ///< RAIL_STATE_* bits
+extern std::atomic<uint32_t> core0RailCommandConsumeCount;
+extern std::atomic<uint32_t> core0RailRefusedCount;    ///< 'P5,0' refused: no USB VBUS, the 5 V rail is the board's own supply
+extern std::atomic<uint32_t> core1RailCycleOffMs;      ///< Off time for the next CORE_COMMAND_CYCLE_RAILS
 
 // =============================================================================
 //  Versioned Atomic Snapshots (Seqlock Pattern)

@@ -124,6 +124,13 @@ struct DiagnosticSnapshot
   uint32_t reportMode;
   LightControllerDiagnostics light;
 
+  // Power rails (Rev 2.2)
+  uint32_t railState;
+  uint32_t railCommandConsumeCount;
+  uint32_t railCycleOffMs;
+  uint32_t railRefusedCount;
+  uint32_t usbVbusPresent;
+
   // ToF Shared Buffers & Rates
   uint32_t tofSecondarySlotUses;
   uint32_t tofMaxOccupiedSlots;
@@ -417,6 +424,12 @@ void core1TriggerDiagnosticSnapshot(Core1OutputTarget target)
   diagSnap.reportMode = (uint32_t)core1ApplicationReportMode;
   copyLightControllerDiagnostics(&diagSnap.light);
 
+  diagSnap.railState = core0RailState.load(std::memory_order_acquire);
+  diagSnap.railCommandConsumeCount = core0RailCommandConsumeCount.load(std::memory_order_relaxed);
+  diagSnap.railCycleOffMs = core1RailCycleOffMs.load(std::memory_order_relaxed);
+  diagSnap.railRefusedCount = core0RailRefusedCount.load(std::memory_order_relaxed);
+  diagSnap.usbVbusPresent = gpio_get(USB_VBUS_SENSE_PIN) ? 1u : 0u; // SIO read, no I2C
+
   diagSnap.tofSecondarySlotUses = tofSecondarySlotUseCount.load(std::memory_order_relaxed);
   diagSnap.tofMaxOccupiedSlots = tofMaxOccupiedSlots.load(std::memory_order_relaxed);
 
@@ -618,7 +631,21 @@ void core1ProcessDiagnosticStreaming()
       if (len > 0 && len < (int)sizeof(buf) - 2) { buf[len++] = '\r'; buf[len++] = '\n'; }
       break;
     }
-    case 96: len = snprintf(buf, sizeof(buf), "=== END OF DIAGNOSTIC REPORT ===\r\n\r\n"); break;
+
+    // =========================================================================
+    //  SECTION 8: POWER RAILS (Rev 2.2)
+    // =========================================================================
+    case 96: len = snprintf(buf, sizeof(buf), "\r\n=== POWER RAILS ===\r\n"); break;
+    case 97: len = snprintf(buf, sizeof(buf), "MCP23018 present: %lu%s\r\n", (unsigned long)((diagSnap.railState & RAIL_STATE_MCP_PRESENT) ? 1u : 0u),
+                            (diagSnap.railState & RAIL_STATE_MCP_PRESENT) ? "" : " (rail commands have no effect)"); break;
+    case 98: len = snprintf(buf, sizeof(buf), "11.5V rail (camera power, J16): %s; 5V rail (Pico VSYS without USB, panel I/O): %s\r\n",
+                            (diagSnap.railState & RAIL_STATE_11V_ON) ? "on" : "OFF",
+                            (diagSnap.railState & RAIL_STATE_5V_ON) ? "on" : "OFF"); break;
+    case 99: len = snprintf(buf, sizeof(buf), "USB VBUS present: %lu (5V rail can be switched off only when 1)\r\n", (unsigned long)diagSnap.usbVbusPresent); break;
+    case 100: len = snprintf(buf, sizeof(buf), "Camera power-cycle (PR): %s, off time %lu ms; rail commands %lu, refused %lu\r\n",
+                             (diagSnap.railState & RAIL_STATE_CYCLING) ? "IN PROGRESS" : "idle", (unsigned long)diagSnap.railCycleOffMs,
+                             (unsigned long)diagSnap.railCommandConsumeCount, (unsigned long)diagSnap.railRefusedCount); break;
+    case 101: len = snprintf(buf, sizeof(buf), "=== END OF DIAGNOSTIC REPORT ===\r\n\r\n"); break;
 
     default:
       diagnosticStreamingActive = false;
@@ -631,7 +658,7 @@ void core1ProcessDiagnosticStreaming()
   }
 
   diagnosticLineIndex++;
-  if (diagnosticLineIndex > 96)
+  if (diagnosticLineIndex > 101)
   {
     diagnosticStreamingActive = false;
   }
@@ -710,13 +737,41 @@ static void core1ExecuteCommandLine(const char *line, uint32_t source)
       return;
     }
 
+    case 'P': // Power rails: 'P11,0|1' camera rail, 'P5,0|1' 5 V rail (off refused without USB), 'PR<ms>' camera power-cycle
+    {
+      if (line[1] == 'R')
+      {
+        if (!parseCommandNumber(line + 2, &value)) value = RAIL_CYCLE_DEFAULT_OFF_MS;
+        if (value < RAIL_CYCLE_MIN_OFF_MS) value = RAIL_CYCLE_MIN_OFF_MS;
+        if (value > RAIL_CYCLE_MAX_OFF_MS) value = RAIL_CYCLE_MAX_OFF_MS;
+        core1RailCycleOffMs.store(value, std::memory_order_release);
+        uint32_t sequence = ++core1CommandSequence;
+        core1TryEnqueueCommand(CORE_COMMAND_CYCLE_RAILS, 0, source, sequence);
+        return;
+      }
+
+      uint32_t rail = 0;
+      if (!parseCommandNumber(line + 1, &rail)) { core1DiscardedCommandLineCount++; return; }
+      const char *p = line + 1;
+      while ((*p >= '0') && (*p <= '9')) p++;
+      if ((*p != ',') || ((p[1] != '0') && (p[1] != '1')) || (p[2] != 0) || ((rail != 5) && (rail != 11)))
+      {
+        core1DiscardedCommandLineCount++; // malformed: never guess which rail was meant
+        return;
+      }
+      uint32_t payload = ((rail == 11) ? 1u : 0u) | ((p[1] == '1') ? 2u : 0u);
+      uint32_t sequence = ++core1CommandSequence;
+      core1TryEnqueueCommand(CORE_COMMAND_SET_RAIL, payload, source, sequence);
+      return;
+    }
+
     default:
       return;
   }
 }
 
 /// @brief Classifies an incoming ASCII command byte and routes actions or enqueues commands.
-/// @param receivedByte ASCII character: single-byte commands i f r t a y h 0 + 1..6 z v x e, or part of an E/N/S line.
+/// @param receivedByte ASCII character: single-byte commands i f r t a y h 0 + 1..6 z v x e, or part of an E/N/S/P line.
 /// @param source Originating transport interface (COMMAND_SOURCE_SERIAL or COMMAND_SOURCE_ETHERNET).
 void core1ClassifyCommandByte(uint8_t receivedByte, uint32_t source)
 {
@@ -754,7 +809,7 @@ void core1ClassifyCommandByte(uint8_t receivedByte, uint32_t source)
   if (endOfLine) return;
   if (core1ResetState != CORE1_RESET_IDLE) return;
 
-  if ((receivedByte == 'E') || (receivedByte == 'N') || (receivedByte == 'S'))
+  if ((receivedByte == 'E') || (receivedByte == 'N') || (receivedByte == 'S') || (receivedByte == 'P'))
   {
     line.buffer[0] = (char)receivedByte;
     line.length = 1;
