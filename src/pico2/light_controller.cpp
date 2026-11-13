@@ -8,8 +8,7 @@
 // GPIO pins assigned to COB LED channels 1..6
 const uint8_t directLightControl[NUMBER_OF_LIGHTS] = {6, 7, 8, 9, 10, 11};
 
-volatile uint8_t lightOn = NO_LIGHT_ON;                      // Currently selected COB index (0..5 or 16)
-volatile uint32_t activeLightMask = 0;                       // Pre-calculated SIO bitmask (1u << GP)
+volatile uint8_t lightOn = NO_LIGHT_ON;                      // Selected COB (host/timer intent; in 'e' mode the next entry)
 volatile LightCycleState lightCycleState = LIGHT_STATE_READY;// Exposure state machine phase
 int lightHardwareAlarmNum = -1;                              // Claimed RP2350 hardware timer alarm ID
 uint64_t risingEdgeTimeUs = 0;                               // Exposure rising edge timestamp t0 (us)
@@ -22,13 +21,112 @@ unsigned long lastUpdateTime = 0;                            // Timestamp of las
 unsigned long lightStartTime = 0;                            // Timestamp of last light advance (ms)
 unsigned long flashStartTime = 0;                            // Timestamp when timed-flash mode was armed
 
-// SRAM-resident state read by the exposure ISR (no flash access on the fast path)
-static uint32_t lightPinMask[NUMBER_OF_LIGHTS];               // 1u << GPIO for each COB
-static volatile uint8_t lightSchedule[LIGHT_SCHEDULE_MAX_LENGTH] = {0, 1, 2, 3, 4, 5};
-static volatile uint32_t lightScheduleLength = NUMBER_OF_LIGHTS;
-static volatile uint32_t lightScheduleCursor = 0;            // Index of the entry that fires next
+// =============================================================================
+//  Rev 2.2 real-time design (no interrupt-off sections added to 2.1)
+// =============================================================================
+//  * Armed-fire word: ONE 32-bit word says what the next rising edge fires. The rising-edge
+//    fast path is 2.1's (load, test, SIO set) plus a single AND to extract the pin mask.
+//      bits  0..3  COB index that fires (ARM_NO_LIGHT = none)
+//      bit   4     FORCED : this COB was swapped in by the 'N' limit
+//      bit   5     STARVED: 'N' limit reached and nothing else allowed (pin mask is 0)
+//      bits  6..11 SIO pin mask (GP6..GP11), exactly LIGHT_ALL_PINS_MASK bits
+//      bits 16..31 sequence, incremented on every ISR write
+//  * Every 2.2 decision (consecutive limit, substitution, 'e' stepping) is taken AFTER the
+//    20 us guard alarm is armed, inside the guard window: both GP2 edges are disabled there
+//    and the only pending event is that alarm, which is already in the hardware. Bounded:
+//    at most LIGHT_SCHEDULE_MAX_LENGTH compare steps, no division.
+//  * The core-0 loop arms a light with a compare-and-swap on the armed-fire word
+//    (LDREX/STREX, interrupts stay enabled). If the ISR ran meanwhile the sequence field
+//    differs, the CAS fails and the loop recomputes from fresh state. The ISR never waits.
+//  * Schedules are double-buffered: the loop fills the bank the ISR is not reading, then
+//    publishes {bank, length, generation} with a single 32-bit store.
+// =============================================================================
+#define ARM_LIGHT_FIELD     0x0000000Fu
+#define ARM_NO_LIGHT        0x0000000Fu
+#define ARM_FORCED_BIT      0x00000010u
+#define ARM_STARVED_BIT     0x00000020u
+#define ARM_SEQUENCE_UNIT   0x00010000u
+#define ARM_SEQUENCE_FIELD  0xFFFF0000u
+
+#define SCHEDULE_BANK_FIELD       0x00000001u
+#define SCHEDULE_LENGTH_SHIFT     1u
+#define SCHEDULE_LENGTH_FIELD     0x7Fu
+#define SCHEDULE_GENERATION_SHIFT 8u
+
+static std::atomic<uint32_t> armedFire{ARM_NO_LIGHT};
+static uint32_t lightPinMask[NUMBER_OF_LIGHTS];               // 1u << GPIO for each COB (SRAM)
+static uint8_t lightScheduleBank[2][LIGHT_SCHEDULE_MAX_LENGTH] = {{0, 1, 2, 3, 4, 5}, {0, 1, 2, 3, 4, 5}};
+static std::atomic<uint32_t> lightSchedulePublished{(uint32_t)NUMBER_OF_LIGHTS << SCHEDULE_LENGTH_SHIFT};
+
+// Written only by the rising-edge ISR (and by deactivateLights() while the edges are disabled)
 static volatile uint8_t lastFiredLight = NO_LIGHT_ON;        // COB that fired on the previous exposure
 static volatile uint32_t consecutiveFireCount = 0;           // How many exposures in a row it has fired
+static volatile uint32_t isrScheduleCursor = 0;              // Schedule index of the entry that fired last
+static volatile uint32_t isrScheduleGeneration = 0;          // Schedule generation the ISR is walking
+static volatile uint32_t pulseCeilingUs = LIGHT_TURNOFF_US;  // 'E' ceiling latched for the current pulse
+
+/// @brief Decides what the next exposure fires, applying the 'N' consecutive-fire limit.
+/// @param wanted COB the active mode asks for.
+/// @param published Snapshot of lightSchedulePublished (substitutes come from that schedule).
+/// @param cursor When non-null, the scan starts after *cursor and *cursor receives the substitute's index.
+/// @return Armed-fire word without the sequence field.
+static inline uint32_t __not_in_flash_func(chooseArmedFire)(uint8_t wanted, uint32_t published, volatile uint32_t *cursor)
+{
+  if (wanted >= NUMBER_OF_LIGHTS) return ARM_NO_LIGHT;
+
+  uint32_t limit = lightMaxConsecutiveActivations.load(std::memory_order_relaxed);
+  if ((limit == 0) || (wanted != lastFiredLight) || (consecutiveFireCount < limit))
+  {
+    return lightPinMask[wanted] | wanted;
+  }
+
+  const uint8_t *bank = lightScheduleBank[published & SCHEDULE_BANK_FIELD];
+  uint32_t length = (published >> SCHEDULE_LENGTH_SHIFT) & SCHEDULE_LENGTH_FIELD;
+  uint32_t index = (cursor != nullptr) ? *cursor : (length - 1u); // no cursor: scan from entry 0
+  for (uint32_t step = 0; step < length; step++)
+  {
+    index++;
+    if (index >= length) index = 0;
+    uint8_t candidate = bank[index];
+    if (candidate != wanted)
+    {
+      if (cursor != nullptr) *cursor = index;
+      return lightPinMask[candidate] | candidate | ARM_FORCED_BIT;
+    }
+  }
+  return ARM_STARVED_BIT | wanted;
+}
+
+/// @brief Core-0 loop side: arms `wanted` for the next exposure without disabling interrupts.
+static void armFromLoop(uint8_t wanted)
+{
+  uint32_t current = armedFire.load(std::memory_order_relaxed);
+  uint32_t desired;
+  do
+  {
+    desired = chooseArmedFire(wanted, lightSchedulePublished.load(std::memory_order_relaxed), nullptr) |
+              (current & ARM_SEQUENCE_FIELD);
+  } while (!armedFire.compare_exchange_weak(current, desired, std::memory_order_relaxed, std::memory_order_relaxed));
+}
+
+/// @brief Core-0 loop side, 'e' mode: makes schedule entry 0 fire next after a new generation.
+/// @note If the ISR has already fired since the generation was published, it has restarted the
+///       walk itself (the light it fired counts as entry 0) and its arming is kept.
+static void restartScheduleFromLoop()
+{
+  uint32_t published = lightSchedulePublished.load(std::memory_order_relaxed);
+  uint32_t generation = published >> SCHEDULE_GENERATION_SHIFT;
+  uint32_t current = armedFire.load(std::memory_order_relaxed);
+  if (isrScheduleGeneration == generation) return;
+
+  uint8_t first = lightScheduleBank[published & SCHEDULE_BANK_FIELD][0];
+  uint32_t desired = chooseArmedFire(first, published, nullptr) | (current & ARM_SEQUENCE_FIELD);
+  if (armedFire.compare_exchange_strong(current, desired, std::memory_order_relaxed, std::memory_order_relaxed))
+  {
+    lightOn = (uint8_t)(desired & ARM_LIGHT_FIELD);
+  }
+  // CAS failure: the ISR fired after the generation was published and re-armed per the new schedule.
+}
 
 /// @brief Configures direct GPIO pins, claims hardware alarm, and registers exposure ISR.
 /// @note Sets NVIC Priority 0 (highest) on IO_IRQ_BANK0 and hardware timer interrupt.
@@ -42,7 +140,7 @@ void initLightController()
   }
 
   lightOn = NO_LIGHT_ON;
-  activeLightMask = 0;
+  armedFire.store(ARM_NO_LIGHT, std::memory_order_relaxed);
   lightCycleState = LIGHT_STATE_READY;
 
   lightHardwareAlarmNum = hardware_alarm_claim_unused(true);
@@ -61,13 +159,13 @@ void initLightController()
 }
 
 /// @brief Schedules a specified COB LED to be gated on the next exposure rising edge.
-/// @param lightIdx 0-indexed COB number (0..5). Pre-calculates SIO activeLightMask.
+/// @param lightIdx 0-indexed COB number (0..5). The 'N' limit may arm a substitute instead.
 void activateLight(uint8_t lightIdx)
 {
   if (lightIdx < NUMBER_OF_LIGHTS)
   {
     lightOn = lightIdx;
-    activeLightMask = (1u << directLightControl[lightIdx]);
+    armFromLoop(lightIdx);
   }
 }
 
@@ -91,16 +189,77 @@ void deactivateLights()
   sio_hw->gpio_clr = LIGHT_ALL_PINS_MASK;
 
   lightCycleState = LIGHT_STATE_KEEP_OFF;
-  activeLightMask = 0;
   lightOn         = NO_LIGHT_ON;
 
-  // Lights off ends any run: the next exposure starts counting from 1 again
-  lastFiredLight       = NO_LIGHT_ON;
+  // Edges are disabled and the alarm is cancelled, so no ISR can run here: plain stores are safe.
+  armedFire.store((armedFire.load(std::memory_order_relaxed) & ARM_SEQUENCE_FIELD) | ARM_NO_LIGHT,
+                  std::memory_order_relaxed);
+  lastFiredLight       = NO_LIGHT_ON; // Lights off ends any run
   consecutiveFireCount = 0;
 
   // 5. Re-arm RISE interrupt only after physical shutdown is complete
   lightCycleState = LIGHT_STATE_READY;
   gpio_set_irq_enabled(CAMERA_EXPOSURE_PIN, GPIO_IRQ_EDGE_RISE, true);
+}
+
+/// @brief Publishes a new light schedule (core-0 loop context, interrupts stay enabled).
+/// @param schedule 0-indexed COBs; entries >= NUMBER_OF_LIGHTS are dropped.
+/// @param length Number of entries (clamped to LIGHT_SCHEDULE_MAX_LENGTH). Empty input is ignored.
+void setLightSchedule(const uint8_t *schedule, uint32_t length)
+{
+  if (schedule == nullptr) return;
+  if (length > LIGHT_SCHEDULE_MAX_LENGTH) length = LIGHT_SCHEDULE_MAX_LENGTH;
+
+  uint32_t published = lightSchedulePublished.load(std::memory_order_relaxed);
+  uint32_t bank = (published & SCHEDULE_BANK_FIELD) ^ 1u; // the bank the ISR is NOT reading
+
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < length; i++)
+  {
+    if (schedule[i] < NUMBER_OF_LIGHTS) lightScheduleBank[bank][count++] = schedule[i];
+  }
+  if (count == 0) return;
+
+  uint32_t generation = (published >> SCHEDULE_GENERATION_SHIFT) + 1u;
+  lightSchedulePublished.store((generation << SCHEDULE_GENERATION_SHIFT) |
+                               (count << SCHEDULE_LENGTH_SHIFT) | bank,
+                               std::memory_order_relaxed);
+
+  if (autoLights == STEP_EXPOSURE) restartScheduleFromLoop();
+}
+
+/// @brief Hands light sequencing to the exposure ISR: one schedule step per exposure,
+///        starting from schedule entry 0.
+void enterExposureLockedMode()
+{
+  autoLights = STEP_EXPOSURE;
+
+  // Same bank and length, new generation: tells the ISR to restart the walk
+  uint32_t published = lightSchedulePublished.load(std::memory_order_relaxed);
+  uint32_t generation = (published >> SCHEDULE_GENERATION_SHIFT) + 1u;
+  lightSchedulePublished.store((generation << SCHEDULE_GENERATION_SHIFT) |
+                               (published & ((1u << SCHEDULE_GENERATION_SHIFT) - 1u)),
+                               std::memory_order_relaxed);
+  restartScheduleFromLoop();
+}
+
+/// @brief Copies light-controller state for the diagnostic report (Core 1, no locking).
+/// @note A value can be one exposure stale, and a schedule published at the same instant can
+///       show mixed entries. Diagnostic use only; Core 0 is never blocked.
+void copyLightControllerDiagnostics(LightControllerDiagnostics *out)
+{
+  if (out == nullptr) return;
+  uint32_t published = lightSchedulePublished.load(std::memory_order_relaxed);
+  uint32_t length = (published >> SCHEDULE_LENGTH_SHIFT) & SCHEDULE_LENGTH_FIELD;
+  if (length > LIGHT_SCHEDULE_MAX_LENGTH) length = LIGHT_SCHEDULE_MAX_LENGTH;
+
+  out->mode = autoLights;
+  out->lastFiredLight = lastFiredLight;
+  out->consecutiveFireCount = consecutiveFireCount;
+  out->scheduleLength = length;
+  out->scheduleCursor = isrScheduleCursor;
+  out->armedWord = armedFire.load(std::memory_order_relaxed);
+  for (uint32_t i = 0; i < length; i++) out->schedule[i] = lightScheduleBank[published & SCHEDULE_BANK_FIELD][i];
 }
 
 /// @brief Computes the next COB LED index based on current light and active pattern.
@@ -117,67 +276,6 @@ uint8_t getNextLight(uint8_t current, uint8_t total, uint8_t pattern)
     if (current < 6) return alt[current];
   }
   return (current + 1) % total;
-}
-
-/// @brief Replaces the light schedule used by 'e' mode and by the 'N' limit's choice of substitute.
-/// @param schedule 0-indexed COBs; entries >= NUMBER_OF_LIGHTS are dropped.
-/// @param length Number of entries (clamped to LIGHT_SCHEDULE_MAX_LENGTH). Empty input is ignored.
-void setLightSchedule(const uint8_t *schedule, uint32_t length)
-{
-  if (schedule == nullptr) return;
-  if (length > LIGHT_SCHEDULE_MAX_LENGTH) length = LIGHT_SCHEDULE_MAX_LENGTH;
-
-  uint8_t filtered[LIGHT_SCHEDULE_MAX_LENGTH];
-  uint32_t count = 0;
-  for (uint32_t i = 0; i < length; i++)
-  {
-    if (schedule[i] < NUMBER_OF_LIGHTS) filtered[count++] = schedule[i];
-  }
-  if (count == 0) return;
-
-  // The exposure ISR reads the schedule, so swap it in with interrupts off (<= 60 bytes)
-  uint32_t interruptState = save_and_disable_interrupts();
-  for (uint32_t i = 0; i < count; i++) lightSchedule[i] = filtered[i];
-  lightScheduleLength = count;
-  lightScheduleCursor = 0;
-  if (autoLights == STEP_EXPOSURE)
-  {
-    lightOn = filtered[0];
-    activeLightMask = lightPinMask[filtered[0]];
-  }
-  restore_interrupts(interruptState);
-}
-
-/// @brief Hands light sequencing to the exposure ISR: one schedule step per exposure.
-void enterExposureLockedMode()
-{
-  uint32_t interruptState = save_and_disable_interrupts();
-  autoLights = STEP_EXPOSURE;
-  lightScheduleCursor = 0;
-  lightOn = lightSchedule[0];
-  activeLightMask = lightPinMask[lightSchedule[0]];
-  restore_interrupts(interruptState);
-}
-
-/// @brief Finds a schedule entry other than `avoid`, scanning forward from the cursor.
-/// @param avoid COB that has reached the consecutive-fire limit.
-/// @param foundIndex Receives the schedule index of the returned COB.
-/// @return Substitute COB, or NO_LIGHT_ON when the schedule holds nothing else.
-static inline uint8_t __not_in_flash_func(findSubstituteLight)(uint8_t avoid, uint32_t *foundIndex)
-{
-  uint32_t length = lightScheduleLength;
-  uint32_t index = lightScheduleCursor;
-  for (uint32_t step = 0; step < length; step++)
-  {
-    index = (index + 1u) % length;
-    uint8_t candidate = lightSchedule[index];
-    if (candidate != avoid)
-    {
-      *foundIndex = index;
-      return candidate;
-    }
-  }
-  return NO_LIGHT_ON;
 }
 
 /// @brief Atomically acquires permission to close an active exposure pulse.
@@ -239,11 +337,9 @@ void __not_in_flash_func(lightHardwareTimerCallback)(uint alarm_num)
     gpio_set_irq_enabled(CAMERA_EXPOSURE_PIN, GPIO_IRQ_EDGE_FALL, true);
     if (lightHardwareAlarmNum >= 0)
     {
-      // Stage 2 timeout: host ceiling from 'E<us>', already clamped to <= LIGHT_TURNOFF_US
-      uint32_t ceilingUs = lightOnCeilingUs.load(std::memory_order_relaxed);
-      if ((ceilingUs < LIGHT_ON_CEILING_MIN_US) || (ceilingUs > LIGHT_TURNOFF_US)) ceilingUs = LIGHT_TURNOFF_US;
+      // Stage 2 timeout: 'E' ceiling latched by the rising-edge ISR for this pulse
       hardware_alarm_set_target((uint)lightHardwareAlarmNum,
-                                from_us_since_boot(risingEdgeTimeUs + ceilingUs));
+                                from_us_since_boot(risingEdgeTimeUs + pulseCeilingUs));
     }
     return;
   }
@@ -274,8 +370,74 @@ void __not_in_flash_func(lightHardwareTimerCallback)(uint alarm_num)
   }
 }
 
+/// @brief Rev 2.2 work done after the rising edge, inside the 20 us guard window.
+/// @note Called by exposureISR() only after the COB is on, both GP2 edges are disabled and the
+///       t0 + 20 us alarm is armed. Separate and noinline so that the ISR's entry (which runs
+///       before turn-on) does not have to save the registers this work needs.
+static void __attribute__((noinline)) __not_in_flash_func(exposureGuardWindowWork)(uint32_t armed, uint32_t pulseNumber)
+{
+  // -------------------------------------------------------------------------
+  // Guard-window work (Rev 2.2). Both GP2 edges are disabled and the t0 + 20 us alarm is
+  // already armed; the timer IRQ has the same priority, so it runs right after this
+  // returns. Bounded: <= LIGHT_SCHEDULE_MAX_LENGTH compare steps, no division.
+  // -------------------------------------------------------------------------
+  pulseCeilingUs = lightOnCeilingUs.load(std::memory_order_relaxed); // clamped when 'E' was parsed
+
+  uint8_t fired = (uint8_t)(armed & ARM_LIGHT_FIELD);
+  if (armed & ARM_FORCED_BIT)
+  {
+    lightForcedAdvanceCount.fetch_add(1, std::memory_order_relaxed);
+  }
+  if (fired == lastFiredLight)
+  {
+    if (consecutiveFireCount != 0xFFFFFFFFu) consecutiveFireCount = consecutiveFireCount + 1u;
+  }
+  else
+  {
+    lastFiredLight = fired;
+    consecutiveFireCount = 1;
+  }
+
+  // Counter and light in one word, so Core 1 can never pair a count with the wrong light
+  lightLastStrobeWord.store((pulseNumber << STROBE_WORD_COUNTER_SHIFT) | fired, std::memory_order_relaxed);
+
+  // Decide what the next exposure fires
+  uint32_t published = lightSchedulePublished.load(std::memory_order_relaxed);
+  uint32_t next;
+  if (autoLights == STEP_EXPOSURE)
+  {
+    uint32_t length = (published >> SCHEDULE_LENGTH_SHIFT) & SCHEDULE_LENGTH_FIELD;
+    uint32_t generation = published >> SCHEDULE_GENERATION_SHIFT;
+    uint32_t cursor = isrScheduleCursor;
+    if (generation != isrScheduleGeneration)
+    {
+      // New schedule (or 'e' restart): the COB that just fired counts as entry 0
+      isrScheduleGeneration = generation;
+      cursor = 0;
+    }
+    cursor++;
+    if (cursor >= length) cursor = 0;
+
+    volatile uint32_t chosenIndex = cursor;
+    next = chooseArmedFire(lightScheduleBank[published & SCHEDULE_BANK_FIELD][cursor], published, &chosenIndex);
+    isrScheduleCursor = chosenIndex;
+    lightOn = (uint8_t)(next & ARM_LIGHT_FIELD);
+  }
+  else
+  {
+    // Keep the selected COB; with no selection, keep the one that fired (2.1 behaviour)
+    uint8_t wanted = lightOn;
+    if (wanted >= NUMBER_OF_LIGHTS) wanted = fired;
+    next = chooseArmedFire(wanted, published, nullptr);
+  }
+
+  // Sequence bump makes any in-flight core-0 loop CAS fail and recompute
+  armedFire.store(next | ((armed & ARM_SEQUENCE_FIELD) + ARM_SEQUENCE_UNIT), std::memory_order_relaxed);
+}
+
 /// @brief Unified exposure GPIO ISR on GP2 (NVIC Priority 0, resident in SRAM).
-/// @note Executes single-cycle SIO turn-on (~6.6 ns latency) as the very first instruction.
+/// @note The rising-edge path up to the 20 us alarm is 2.1's, plus one AND on the armed word.
+///       All Rev 2.2 work follows the alarm, inside the guard window (see the design note above).
 void __not_in_flash_func(exposureISR)()
 {
   if (lightCycleState == LIGHT_STATE_READY)
@@ -283,63 +445,26 @@ void __not_in_flash_func(exposureISR)()
     // -------------------------------------------------------------------------
     // Exposure rising edge (t0)
     // -------------------------------------------------------------------------
-    uint32_t mask = activeLightMask;
-    if (mask == 0) return;
-    uint8_t light = lightOn;
-    if (light >= NUMBER_OF_LIGHTS) return;
-
-    // Consecutive-fire limit ('N<n>', <= MAX_CONSECUTIVE_ACTIVATIONS_OF_LIGHT). Checked before
-    // turn-on, so it costs a few cycles of latency only on the exposure that hits the limit.
-    if ((light == lastFiredLight) &&
-        (consecutiveFireCount >= lightMaxConsecutiveActivations.load(std::memory_order_relaxed)))
+    uint32_t armed = armedFire.load(std::memory_order_relaxed);
+    uint32_t mask = armed & LIGHT_ALL_PINS_MASK;
+    if (mask == 0)
     {
-      uint32_t substituteIndex = 0;
-      uint8_t substitute = findSubstituteLight(light, &substituteIndex);
-      if (substitute >= NUMBER_OF_LIGHTS)
+      if (armed & ARM_STARVED_BIT)
       {
-        // Nothing else is allowed: leave this exposure dark rather than exceed the limit
+        // 'N' limit reached with no other COB allowed: this exposure stays dark
         lightStarvedCount.fetch_add(1, std::memory_order_relaxed);
-        return;
       }
-      light = substitute;
-      mask = lightPinMask[substitute];
-      lightScheduleCursor = substituteIndex;
-      lightOn = substitute;
-      activeLightMask = mask;
-      lightForcedAdvanceCount.fetch_add(1, std::memory_order_relaxed);
+      return;
     }
 
-    // Fast path: turn ON selected COB
+    // Fast path: turn ON armed COB as the very first operation
     sio_hw->gpio_set = mask;
 
     // Record t0
     risingEdgeTimeUs = time_us_64();
 
-    // Track the run of the COB that actually fired
-    if (light == lastFiredLight)
-    {
-      consecutiveFireCount = consecutiveFireCount + 1u;
-    }
-    else
-    {
-      lastFiredLight = light;
-      consecutiveFireCount = 1;
-    }
-    lightLastStrobeLight.store(light, std::memory_order_relaxed);
-
-    // Increment pulse counter while COB is already ON (0 ns jitter impact). Published after
-    // lightLastStrobeLight so a reader that sees the new count also sees the new light.
-    exposurePulseCount.fetch_add(1, std::memory_order_release);
-
-    // Exposure-locked mode: queue the next schedule entry for the next exposure
-    if (autoLights == STEP_EXPOSURE)
-    {
-      uint32_t next = (lightScheduleCursor + 1u) % lightScheduleLength;
-      lightScheduleCursor = next;
-      uint8_t nextLight = lightSchedule[next];
-      lightOn = nextLight;
-      activeLightMask = lightPinMask[nextLight];
-    }
+    // Increment pulse counter while COB is already ON (0 ns jitter impact)
+    uint32_t pulseNumber = exposurePulseCount.fetch_add(1, std::memory_order_relaxed) + 1u;
 
     // Immediately disable both edges on GP2 during the 20 us guard window
     gpio_set_irq_enabled(CAMERA_EXPOSURE_PIN, GPIO_IRQ_EDGE_RISE, false);
@@ -355,6 +480,9 @@ void __not_in_flash_func(exposureISR)()
       hardware_alarm_set_target((uint)lightHardwareAlarmNum,
                                 from_us_since_boot(risingEdgeTimeUs + LIGHT_FALL_ARM_DELAY_US));
     }
+
+    // Rev 2.2 bookkeeping, kept out of this function so its entry stays as short as 2.1's
+    exposureGuardWindowWork(armed, pulseNumber);
     return;
   }
 

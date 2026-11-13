@@ -27,6 +27,7 @@ uintptr_t core1StackPointerAtSetup1Completion = 0;
 uintptr_t core1StackPointerAtDiagnosticPoint = 0;
 
 uint32_t core1CommandSequence = 0; // Monotonic sequence counter for Core 1 commands
+static uint32_t core1DiscardedCommandLineCount = 0; // Unknown or overlong command lines dropped (Core 1 only)
 
 // =============================================================================
 //  Binary Snapshot Structure (~300 bytes) & Sliced Formatter State
@@ -110,6 +111,18 @@ struct DiagnosticSnapshot
   uint32_t expShortPulses;
   uint32_t expGuardrailTimeouts;
   uint32_t expCyclesCompleted;
+
+  // Light limits & schedule (Rev 2.2)
+  uint32_t lightOnCeilingUs;
+  uint32_t maxConsecutive;
+  uint32_t lastStrobeLight;
+  uint32_t forcedAdvances;
+  uint32_t starved;
+  uint32_t exposureLockedConsumeCount;
+  uint32_t scheduleConsumeCount;
+  uint32_t discardedCommandLines;
+  uint32_t reportMode;
+  LightControllerDiagnostics light;
 
   // ToF Shared Buffers & Rates
   uint32_t tofSecondarySlotUses;
@@ -393,6 +406,17 @@ void core1TriggerDiagnosticSnapshot(Core1OutputTarget target)
   diagSnap.expGuardrailTimeouts = exposureGuardrailTimeoutCount.load(std::memory_order_relaxed);
   diagSnap.expCyclesCompleted = exposureCycleCompleteCount.load(std::memory_order_relaxed);
 
+  diagSnap.lightOnCeilingUs = lightOnCeilingUs.load(std::memory_order_relaxed);
+  diagSnap.maxConsecutive = lightMaxConsecutiveActivations.load(std::memory_order_relaxed);
+  diagSnap.lastStrobeLight = lightLastStrobeWord.load(std::memory_order_relaxed) & STROBE_WORD_LIGHT_FIELD;
+  diagSnap.forcedAdvances = lightForcedAdvanceCount.load(std::memory_order_relaxed);
+  diagSnap.starved = lightStarvedCount.load(std::memory_order_relaxed);
+  diagSnap.exposureLockedConsumeCount = core0ExposureLockedCommandConsumeCount.load(std::memory_order_relaxed);
+  diagSnap.scheduleConsumeCount = core0ScheduleCommandConsumeCount.load(std::memory_order_relaxed);
+  diagSnap.discardedCommandLines = core1DiscardedCommandLineCount;
+  diagSnap.reportMode = (uint32_t)core1ApplicationReportMode;
+  copyLightControllerDiagnostics(&diagSnap.light);
+
   diagSnap.tofSecondarySlotUses = tofSecondarySlotUseCount.load(std::memory_order_relaxed);
   diagSnap.tofMaxOccupiedSlots = tofMaxOccupiedSlots.load(std::memory_order_relaxed);
 
@@ -501,7 +525,7 @@ void core1ProcessDiagnosticStreaming()
     case 41: len = snprintf(buf, sizeof(buf), "Exposure pulses triggered (t0): %lu\r\n", (unsigned long)diagSnap.expPulses); break;
     case 42: len = snprintf(buf, sizeof(buf), "Exposure normal camera falls: %lu\r\n", (unsigned long)diagSnap.expNormalFalls); break;
     case 43: len = snprintf(buf, sizeof(buf), "Exposure short pulses (<20us): %lu\r\n", (unsigned long)diagSnap.expShortPulses); break;
-    case 44: len = snprintf(buf, sizeof(buf), "Exposure guardrail timeouts (1000us): %lu\r\n", (unsigned long)diagSnap.expGuardrailTimeouts); break;
+    case 44: len = snprintf(buf, sizeof(buf), "Exposure guardrail timeouts (light-on ceiling): %lu\r\n", (unsigned long)diagSnap.expGuardrailTimeouts); break;
     case 45: len = snprintf(buf, sizeof(buf), "Exposure cycles completed (40ms): %lu\r\n", (unsigned long)diagSnap.expCyclesCompleted); break;
 
     // =========================================================================
@@ -558,7 +582,43 @@ void core1ProcessDiagnosticStreaming()
     case 80: len = snprintf(buf, sizeof(buf), "Core0 advance-light command consume count: %lu\r\n", (unsigned long)diagSnap.advanceLightConsumeCount); break;
     case 81: len = snprintf(buf, sizeof(buf), "Core0 reset command consume count: %lu\r\n", (unsigned long)diagSnap.resetConsumeCount); break;
     case 82: len = snprintf(buf, sizeof(buf), "Core0 timed-mode command consume count: %lu\r\n", (unsigned long)diagSnap.timedModeConsumeCount); break;
-    case 83: len = snprintf(buf, sizeof(buf), "=== END OF DIAGNOSTIC REPORT ===\r\n\r\n"); break;
+    case 83: len = snprintf(buf, sizeof(buf), "Core0 exposure-locked command consume count: %lu\r\n", (unsigned long)diagSnap.exposureLockedConsumeCount); break;
+    case 84: len = snprintf(buf, sizeof(buf), "Core0 schedule command consume count: %lu\r\n", (unsigned long)diagSnap.scheduleConsumeCount); break;
+    case 85: len = snprintf(buf, sizeof(buf), "Core1 discarded command lines (unknown/overlong): %lu\r\n", (unsigned long)diagSnap.discardedCommandLines); break;
+
+    // =========================================================================
+    //  SECTION 7: LIGHT LIMITS & SCHEDULE (Rev 2.2)
+    // =========================================================================
+    case 86: len = snprintf(buf, sizeof(buf), "\r\n=== LIGHT LIMITS & SCHEDULE ===\r\n"); break;
+    case 87: len = snprintf(buf, sizeof(buf), "Light mode: %lu (0=external, 1=timer, 2=depth, 4=timed, 8=exposure-locked)\r\n", (unsigned long)diagSnap.light.mode); break;
+    case 88: len = snprintf(buf, sizeof(buf), "Core1 report mode: %lu (0=on light change, 1=depth, 2=per strobe)\r\n", (unsigned long)diagSnap.reportMode); break;
+    case 89: len = snprintf(buf, sizeof(buf), "Light-on ceiling (E): %lu us (range %u..%u)\r\n", (unsigned long)diagSnap.lightOnCeilingUs, (unsigned)LIGHT_ON_CEILING_MIN_US, (unsigned)LIGHT_TURNOFF_US); break;
+    case 90: len = snprintf(buf, sizeof(buf), "Consecutive-fire limit (N): %lu (0 = unlimited)\r\n", (unsigned long)diagSnap.maxConsecutive); break;
+    case 91: len = snprintf(buf, sizeof(buf), "Last strobe light: %ld, current run: %lu\r\n",
+                            (diagSnap.lastStrobeLight < NUMBER_OF_LIGHTS) ? (long)diagSnap.lastStrobeLight : -1L,
+                            (unsigned long)diagSnap.light.consecutiveFireCount); break;
+    case 92: len = snprintf(buf, sizeof(buf), "Forced advances (N limit): %lu, starved exposures: %lu\r\n", (unsigned long)diagSnap.forcedAdvances, (unsigned long)diagSnap.starved); break;
+    case 93: len = snprintf(buf, sizeof(buf), "Schedule length: %lu, cursor: %lu\r\n", (unsigned long)diagSnap.light.scheduleLength, (unsigned long)diagSnap.light.scheduleCursor); break;
+    case 94:
+    {
+      uint32_t armedLight = diagSnap.light.armedWord & 0x0Fu;
+      len = snprintf(buf, sizeof(buf), "Armed for next exposure: light %ld%s%s\r\n",
+                     (armedLight < NUMBER_OF_LIGHTS) ? (long)armedLight : -1L,
+                     (diagSnap.light.armedWord & 0x10u) ? " (forced by N)" : "",
+                     (diagSnap.light.armedWord & 0x20u) ? " (starved by N: dark)" : "");
+      break;
+    }
+    case 95:
+    {
+      len = snprintf(buf, sizeof(buf), "Schedule (S, 0-indexed): ");
+      for (uint32_t i = 0; (i < diagSnap.light.scheduleLength) && (len > 0) && (len < (int)sizeof(buf) - 3); i++)
+      {
+        buf[len++] = (char)('0' + diagSnap.light.schedule[i]);
+      }
+      if (len > 0 && len < (int)sizeof(buf) - 2) { buf[len++] = '\r'; buf[len++] = '\n'; }
+      break;
+    }
+    case 96: len = snprintf(buf, sizeof(buf), "=== END OF DIAGNOSTIC REPORT ===\r\n\r\n"); break;
 
     default:
       diagnosticStreamingActive = false;
@@ -571,7 +631,7 @@ void core1ProcessDiagnosticStreaming()
   }
 
   diagnosticLineIndex++;
-  if (diagnosticLineIndex > 83)
+  if (diagnosticLineIndex > 96)
   {
     diagnosticStreamingActive = false;
   }
@@ -620,27 +680,31 @@ static void core1ExecuteCommandLine(const char *line, uint32_t source)
       lightOnCeilingUs.store(value, std::memory_order_relaxed);
       return;
 
-    case 'N': // Max consecutive exposures for one COB; missing/0/too large -> the hard ceiling
-      if (!parseCommandNumber(line + 1, &value) || (value == 0) ||
-          (value > MAX_CONSECUTIVE_ACTIVATIONS_OF_LIGHT))
-      {
-        value = MAX_CONSECUTIVE_ACTIVATIONS_OF_LIGHT;
-      }
+    case 'N': // Max consecutive exposures for one COB; 'N0' or a bare 'N' removes the limit
+      if (!parseCommandNumber(line + 1, &value)) value = 0;
       lightMaxConsecutiveActivations.store(value, std::memory_order_relaxed);
       return;
 
     case 'S': // Light schedule: one 0-indexed digit per entry ('0'..'5'); anything else is skipped
     {
+      uint8_t parsed[LIGHT_SCHEDULE_MAX_LENGTH];
       uint32_t count = 0;
       for (const char *p = line + 1; (*p != 0) && (count < LIGHT_SCHEDULE_MAX_LENGTH); p++)
       {
         if ((*p >= '0') && (*p < (char)('0' + NUMBER_OF_LIGHTS)))
         {
-          core1PendingSchedule[count++] = (uint8_t)(*p - '0');
+          parsed[count++] = (uint8_t)(*p - '0');
         }
       }
       if (count == 0) return;
-      core1PendingScheduleLength.store(count, std::memory_order_release);
+
+      // Seqlock write: odd while the buffer changes, even once it is complete
+      uint32_t version = core1PendingScheduleVersion.load(std::memory_order_relaxed);
+      core1PendingScheduleVersion.store(version + 1u, std::memory_order_relaxed);
+      std::atomic_thread_fence(std::memory_order_release);
+      for (uint32_t i = 0; i < count; i++) core1PendingSchedule[i] = parsed[i];
+      core1PendingScheduleLength.store(count, std::memory_order_relaxed);
+      core1PendingScheduleVersion.store(version + 2u, std::memory_order_release);
       uint32_t sequence = ++core1CommandSequence;
       core1TryEnqueueCommand(CORE_COMMAND_SET_SCHEDULE, 0, source, sequence);
       return;
@@ -682,6 +746,7 @@ void core1ClassifyCommandByte(uint8_t receivedByte, uint32_t source)
     {
       line.collecting = false; // Overlong: drop the whole line, never execute a fragment
       line.discarding = true;
+      core1DiscardedCommandLineCount++;
     }
     return;
   }
@@ -804,7 +869,11 @@ void core1ClassifyCommandByte(uint8_t receivedByte, uint32_t source)
     default:
       // Unknown command letter: drop the rest of its line, so trailing digits of a
       // command this firmware does not know are never executed as light selections.
-      if ((receivedByte > ' ') && (receivedByte < 0x7F)) line.discarding = true;
+      if ((receivedByte > ' ') && (receivedByte < 0x7F))
+      {
+        line.discarding = true;
+        core1DiscardedCommandLineCount++;
+      }
       return;
   }
 

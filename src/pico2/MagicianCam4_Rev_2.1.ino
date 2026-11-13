@@ -151,8 +151,8 @@ static void core0TryDequeueCommand()
     case CORE_COMMAND_SELECT_LIGHT:
       if (payload < NUMBER_OF_LIGHTS)
       {
+        autoLights = STEP_EXTERNAL; // before arming, so an 'e'-mode ISR cannot re-arm over it
         activateLight((uint8_t)payload);
-        autoLights = STEP_EXTERNAL;
         core0LastSelectedLight.store(payload, std::memory_order_relaxed);
         core0SelectLightCommandConsumeCount.fetch_add(1, std::memory_order_relaxed);
       }
@@ -173,12 +173,24 @@ static void core0TryDequeueCommand()
 
     case CORE_COMMAND_EXPOSURE_LOCKED:
       enterExposureLockedMode();
+      core0ExposureLockedCommandConsumeCount.fetch_add(1, std::memory_order_relaxed);
       break;
 
     case CORE_COMMAND_SET_SCHEDULE:
     {
-      uint32_t length = core1PendingScheduleLength.load(std::memory_order_acquire);
-      setLightSchedule(core1PendingSchedule, length);
+      // Seqlock read of Core 1's buffer; a torn copy is dropped (a newer command is queued)
+      uint8_t schedule[LIGHT_SCHEDULE_MAX_LENGTH];
+      uint32_t versionBefore = core1PendingScheduleVersion.load(std::memory_order_acquire);
+      uint32_t length = core1PendingScheduleLength.load(std::memory_order_relaxed);
+      if (length > LIGHT_SCHEDULE_MAX_LENGTH) length = LIGHT_SCHEDULE_MAX_LENGTH;
+      for (uint32_t i = 0; i < length; i++) schedule[i] = core1PendingSchedule[i];
+      std::atomic_thread_fence(std::memory_order_acquire);
+      uint32_t versionAfter = core1PendingScheduleVersion.load(std::memory_order_relaxed);
+      if (((versionBefore & 1u) == 0) && (versionBefore == versionAfter))
+      {
+        setLightSchedule(schedule, length);
+        core0ScheduleCommandConsumeCount.fetch_add(1, std::memory_order_relaxed);
+      }
       break;
     }
 
@@ -312,6 +324,8 @@ void setup()
   core0AdvanceLightCommandConsumeCount.store(0, std::memory_order_relaxed);
   core0ResetCommandConsumeCount.store(0, std::memory_order_relaxed);
   core0TimedModeCommandConsumeCount.store(0, std::memory_order_relaxed);
+  core0ExposureLockedCommandConsumeCount.store(0, std::memory_order_relaxed);
+  core0ScheduleCommandConsumeCount.store(0, std::memory_order_relaxed);
 
   core0RuntimeStatusSnapshot.publicationVersion.store(0, std::memory_order_relaxed);
   core0RuntimeStatusSnapshot.button1.store(0, std::memory_order_relaxed);

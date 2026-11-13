@@ -195,8 +195,9 @@ void core1PrintApplicationReport(Core1OutputTarget target)
 {
   char csvLine[160];
 
-  uint32_t strobeCounter = exposurePulseCount.load(std::memory_order_acquire);
-  uint32_t strobeLight = lightLastStrobeLight.load(std::memory_order_relaxed);
+  uint32_t strobeWord = lightLastStrobeWord.load(std::memory_order_relaxed);
+  uint32_t strobeCounter = strobeWord >> STROBE_WORD_COUNTER_SHIFT;
+  uint32_t strobeLight = strobeWord & STROBE_WORD_LIGHT_FIELD;
   uint32_t forcedAdvances = lightForcedAdvanceCount.load(std::memory_order_relaxed);
   uint32_t starved = lightStarvedCount.load(std::memory_order_relaxed);
 

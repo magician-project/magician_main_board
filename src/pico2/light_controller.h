@@ -39,7 +39,6 @@ enum LightCycleState : uint32_t
 
 extern const uint8_t directLightControl[NUMBER_OF_LIGHTS];
 extern volatile uint8_t lightOn;
-extern volatile uint32_t activeLightMask;
 extern volatile LightCycleState lightCycleState;
 extern int lightHardwareAlarmNum;
 extern uint64_t risingEdgeTimeUs;
@@ -58,6 +57,19 @@ void deactivateLights();
 uint8_t getNextLight(uint8_t current, uint8_t total, uint8_t pattern);
 void setLightSchedule(const uint8_t *schedule, uint32_t length);
 void enterExposureLockedMode();
+
+/// @brief Light-controller state copied for the 'x' diagnostic report.
+struct LightControllerDiagnostics
+{
+  uint32_t mode;                 ///< autoLights (STEP_*)
+  uint32_t lastFiredLight;       ///< 0..5, or NO_LIGHT_ON
+  uint32_t consecutiveFireCount; ///< Current run of lastFiredLight
+  uint32_t scheduleLength;
+  uint32_t scheduleCursor;
+  uint32_t armedWord;            ///< What the next exposure fires (see light_controller.cpp)
+  uint8_t  schedule[LIGHT_SCHEDULE_MAX_LENGTH];
+};
+void copyLightControllerDiagnostics(LightControllerDiagnostics *out);
 
 void __not_in_flash_func(exposureISR)();
 void __not_in_flash_func(lightHardwareTimerCallback)(uint alarm_num);

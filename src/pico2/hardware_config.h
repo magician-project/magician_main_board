@@ -277,8 +277,6 @@ void core0QueueOutputValue(int value);
 // Host-adjustable light limits (Rev 2.2):
 #define LIGHT_ON_CEILING_MIN_US           50    // 'E<us>' lower clamp (must stay > LIGHT_FALL_ARM_DELAY_US)
                                                 // 'E<us>' upper clamp is LIGHT_TURNOFF_US
-#define MAX_CONSECUTIVE_ACTIVATIONS_OF_LIGHT 12 // 'N<n>' hard ceiling and boot default: the same COB
-                                                // never fires more than this many exposures in a row
 #define LIGHT_SCHEDULE_MAX_LENGTH         60    // 'S<digits>' maximum number of schedule entries
 #define COMMAND_LINE_MAX_LENGTH           72    // Longest multi-character command line ('E','N','S')
 

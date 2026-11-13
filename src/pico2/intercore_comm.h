@@ -206,14 +206,19 @@ extern std::atomic<uint32_t> exposureCycleCompleteCount;
 // =============================================================================
 //  Written by Core 1 when it parses 'E<us>' / 'N<n>', read by the Core 0 exposure ISRs.
 extern std::atomic<uint32_t> lightOnCeilingUs;              ///< Max COB on-time per exposure (us), clamped
-extern std::atomic<uint32_t> lightMaxConsecutiveActivations;///< Max exposures in a row for one COB (1..12)
+extern std::atomic<uint32_t> lightMaxConsecutiveActivations;///< Max exposures in a row for one COB (0 = unlimited, the default)
 //  Written by the Core 0 exposure ISR, read by Core 1 for the CSV report.
-extern std::atomic<uint32_t> lightLastStrobeLight;          ///< COB that actually fired last (NO_LIGHT_ON = none yet)
+extern std::atomic<uint32_t> lightLastStrobeWord;           ///< (strobe number << 4) | COB that fired; 0x0F = none yet
+#define STROBE_WORD_COUNTER_SHIFT 4u
+#define STROBE_WORD_LIGHT_FIELD   0x0Fu
 extern std::atomic<uint32_t> lightForcedAdvanceCount;       ///< Exposures where the 'N' limit swapped in another COB
 extern std::atomic<uint32_t> lightStarvedCount;             ///< Exposures left dark: 'N' limit hit, no other COB allowed
-//  'S<digits>' hand-off: Core 1 fills the buffer, then enqueues CORE_COMMAND_SET_SCHEDULE.
+//  'S<digits>' hand-off (seqlock): Core 1 makes the version odd, fills buffer and length, makes it
+//  even again, then enqueues CORE_COMMAND_SET_SCHEDULE. Core 0 drops a copy whose version moved
+//  or was odd: a newer SET_SCHEDULE is then already queued behind it.
 extern uint8_t core1PendingSchedule[LIGHT_SCHEDULE_MAX_LENGTH];
 extern std::atomic<uint32_t> core1PendingScheduleLength;
+extern std::atomic<uint32_t> core1PendingScheduleVersion;
 
 // =============================================================================
 //  Versioned Atomic Snapshots (Seqlock Pattern)
@@ -264,6 +269,8 @@ extern std::atomic<uint32_t> core0DisableLightsCommandConsumeCount;
 extern std::atomic<uint32_t> core0AdvanceLightCommandConsumeCount;
 extern std::atomic<uint32_t> core0ResetCommandConsumeCount;
 extern std::atomic<uint32_t> core0TimedModeCommandConsumeCount;
+extern std::atomic<uint32_t> core0ExposureLockedCommandConsumeCount;
+extern std::atomic<uint32_t> core0ScheduleCommandConsumeCount;
 
 extern std::atomic<uint32_t> core0AcceptedRecommendationVersion;
 extern std::atomic<uint32_t> core0AcceptedRecommendationLight;
