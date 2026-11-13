@@ -25,8 +25,8 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
-#include <Ethernet.h>
-#include <Adafruit_VL53L5CX.h>
+#include "src/Ethernet/Ethernet.h"              // vendored: Arduino Ethernet 2.0.2
+#include "src/Adafruit_VL53L5CX/Adafruit_VL53L5CX.h" // vendored: Adafruit_VL53L5CX 1.0.1 + FORTH patch
 #include <atomic>
 #include <cmath>
 #include "pico/time.h"
